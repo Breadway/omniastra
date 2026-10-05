@@ -119,6 +119,8 @@ enum Cmd {
         batch: usize,
         #[arg(long, default_value_t = 0.002)]
         lr: f64,
+        #[arg(long, default_value_t = 1.0)]
+        target_temp: f32,
     },
     /// Check single- vs multi-shard gradient parity (correctness test).
     ParityCheck {
@@ -283,7 +285,7 @@ fn main() -> Result<()> {
         Cmd::Model(ModelCmd::Inspect { size }) => backend::model_inspect(&size),
         Cmd::Transfer { config, games_dir, devices } => backend::run_transfer(&config, &games_dir, devices),
         Cmd::ParityCheck { shards } => backend::parity_check(shards),
-        Cmd::Diagnose { game, model, sims, games, steps, batch, lr } => backend::run_diagnose(load(&game)?, &model, sims, games, steps, batch, lr),
+        Cmd::Diagnose { game, model, sims, games, steps, batch, lr, target_temp } => backend::run_diagnose(load(&game)?, &model, sims, games, steps, batch, lr, target_temp),
         Cmd::Train { config, games_dir, devices } => backend::run_train(&config, &games_dir, devices),
         Cmd::Selfplay { config, games_dir, devices } => backend::run_selfplay(&config, &games_dir, devices),
         Cmd::Evaluate { checkpoint, model, game, opponents, games, game_idx } => {

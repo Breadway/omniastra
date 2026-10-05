@@ -62,6 +62,12 @@ pub struct DataCfg {
     pub epsilon: f32,
     pub temp_moves: u32,
     pub max_history: usize,
+    /// Sharpen MCTS targets (see `DataSpec::target_temp`).
+    #[serde(default = "d_one_f")]
+    pub target_temp: f32,
+}
+fn d_one_f() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,7 +253,7 @@ pub fn build_instances(c: &TransferConfig, games_dir: &Path) -> Result<Vec<Insta
 }
 
 fn data_spec(c: &DataCfg, games: usize, seed: u64) -> DataSpec {
-    DataSpec { expert: Expert::Mcts { sims: c.sims }, games, epsilon: c.epsilon, temp_moves: c.temp_moves, max_history: c.max_history, seed }
+    DataSpec { expert: Expert::Mcts { sims: c.sims }, games, epsilon: c.epsilon, temp_moves: c.temp_moves, max_history: c.max_history, seed, target_temp: c.target_temp }
 }
 
 fn opponent_factory(game: &Arc<Game>, name: &str) -> Result<AgentFactory> {

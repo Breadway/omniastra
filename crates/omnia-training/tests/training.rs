@@ -19,7 +19,7 @@ fn game(fam: Family, seed: u64) -> Arc<Game> {
 }
 
 fn data(g: &Arc<Game>, idx: u32, games: usize) -> Vec<Sample> {
-    generate_samples(g, idx, 0, &DataSpec { expert: Expert::Heuristic, games, epsilon: 0.2, temp_moves: 0, max_history: 12, seed: 3 })
+    generate_samples(g, idx, 0, &DataSpec { expert: Expert::Heuristic, games, epsilon: 0.2, temp_moves: 0, max_history: 12, seed: 3, target_temp: 1.0 })
 }
 
 fn nano() -> ModelConfig {

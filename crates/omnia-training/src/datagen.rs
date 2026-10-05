@@ -28,11 +28,29 @@ pub struct DataSpec {
     pub temp_moves: u32,
     pub max_history: usize,
     pub seed: u64,
+    /// Sharpen stored MCTS visit-count targets: pi^(1/t) renormalised (1.0 = raw
+    /// visit distribution). UCT spreads visits, so raw targets are close to
+    /// uniform; t < 1 makes the policy-imitation signal measurable.
+    #[serde(default = "one")]
+    pub target_temp: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+pub fn sharpen(pi: &[f32], t: f32) -> Vec<f32> {
+    if (t - 1.0).abs() < 1e-6 {
+        return pi.to_vec();
+    }
+    let w: Vec<f32> = pi.iter().map(|x| x.max(1e-9).powf(1.0 / t)).collect();
+    let s: f32 = w.iter().sum();
+    w.into_iter().map(|x| x / s).collect()
 }
 
 impl Default for DataSpec {
     fn default() -> Self {
-        DataSpec { expert: Expert::Mcts { sims: 32 }, games: 100, epsilon: 0.1, temp_moves: 12, max_history: 32, seed: 1 }
+        DataSpec { expert: Expert::Mcts { sims: 32 }, games: 100, epsilon: 0.1, temp_moves: 12, max_history: 32, seed: 1, target_temp: 1.0 }
     }
 }
 
@@ -83,7 +101,8 @@ fn play_and_record(game: &Arc<Game>, game_idx: u32, family_idx: u32, spec: &Data
         } else {
             expert_best
         };
-        out.push((Sample { obs, pi, value: [0.0; MAX_PLAYERS], game_idx, family_idx }, p));
+        let stored = if matches!(spec.expert, Expert::Mcts { .. }) { sharpen(&pi, spec.target_temp) } else { pi };
+        out.push((Sample { obs, pi: stored, value: [0.0; MAX_PLAYERS], game_idx, family_idx }, p));
         st.apply(a);
         decision += 1;
     }
