@@ -2,7 +2,7 @@ use crate::config::ModelConfig;
 use crate::embed::Embedder;
 use crate::layers::*;
 use crate::tensors::Batch;
-use burn::module::{Module, ModuleVisitor, Param};
+use burn::module::{Module, ModuleMapper, ModuleVisitor, Param};
 use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig};
 use burn::tensor::activation::{log_softmax, silu};
 use burn::tensor::backend::Backend;
@@ -65,7 +65,22 @@ impl<B: Backend> ModuleVisitor<B> for Materialize {
     }
 }
 
+/// Re-enable gradient tracking on every parameter.
+struct EnableGrad;
+impl<B: Backend> ModuleMapper<B> for EnableGrad {
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
+        param.set_require_grad(true)
+    }
+}
+
 impl<B: Backend> OmniAstra<B> {
+    /// Models obtained through `Module::train()` (e.g. weights loaded as an
+    /// inference module, then moved to an autodiff backend) do NOT track
+    /// gradients; call this before fine-tuning. Freezing is applied afterwards.
+    pub fn enable_grad(self) -> Self {
+        self.map(&mut EnableGrad)
+    }
+
     pub fn new(c: &ModelConfig, dev: &B::Device) -> Self {
         let m = Self::new_lazy(c, dev);
         m.visit(&mut Materialize);

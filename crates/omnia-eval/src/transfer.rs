@@ -358,7 +358,8 @@ where
                         (None, _) => fresh,
                         (Some(set), reuse) => {
                             let (src_inner, _) = &pretrained[set];
-                            let src: OmniAstra<B> = src_inner.clone().train::<B>();
+                            // `train()` yields a model that does not track gradients: re-enable.
+                            let src: OmniAstra<B> = src_inner.clone().train::<B>().enable_grad();
                             match reuse {
                                 Reuse::Full => src,
                                 Reuse::Backbone => transplant_backbone(&src, fresh, false),

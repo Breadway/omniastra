@@ -104,6 +104,22 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         game_idx: u32,
     },
+    /// Learnability diagnostics on one game (entropy floor, uniform baseline, train/val fit).
+    Diagnose {
+        game: PathBuf,
+        #[arg(long, default_value = "nano")]
+        model: String,
+        #[arg(long, default_value_t = 16)]
+        sims: u32,
+        #[arg(long, default_value_t = 60)]
+        games: usize,
+        #[arg(long, default_value_t = 800)]
+        steps: usize,
+        #[arg(long, default_value_t = 32)]
+        batch: usize,
+        #[arg(long, default_value_t = 0.002)]
+        lr: f64,
+    },
     /// Check single- vs multi-shard gradient parity (correctness test).
     ParityCheck {
         #[arg(long, default_value_t = 3)]
@@ -267,6 +283,7 @@ fn main() -> Result<()> {
         Cmd::Model(ModelCmd::Inspect { size }) => backend::model_inspect(&size),
         Cmd::Transfer { config, games_dir, devices } => backend::run_transfer(&config, &games_dir, devices),
         Cmd::ParityCheck { shards } => backend::parity_check(shards),
+        Cmd::Diagnose { game, model, sims, games, steps, batch, lr } => backend::run_diagnose(load(&game)?, &model, sims, games, steps, batch, lr),
         Cmd::Train { config, games_dir, devices } => backend::run_train(&config, &games_dir, devices),
         Cmd::Selfplay { config, games_dir, devices } => backend::run_selfplay(&config, &games_dir, devices),
         Cmd::Evaluate { checkpoint, model, game, opponents, games, game_idx } => {

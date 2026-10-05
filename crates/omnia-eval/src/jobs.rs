@@ -183,3 +183,51 @@ where
     }
     Ok(out)
 }
+
+/// Diagnose learnability on one game: target-entropy floor, uniform baseline,
+/// and train/val fit over training. Use before trusting a transfer metric.
+#[allow(clippy::too_many_arguments)]
+pub fn diagnose<B: AutodiffBackend>(game: Arc<omnia_engine::Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64, devices: Vec<B::Device>) -> Result<()>
+where
+    B::Device: Send + Sync,
+{
+    let mcfg = model_cfg(model, &None, 8)?;
+    let spec = |g, seed| DataSpec { expert: Expert::Mcts { sims }, games: g, epsilon: 0.1, temp_moves: 10, max_history: 12, seed };
+    let tr = generate_samples(&game, 0, 0, &spec(games, 11));
+    let va = generate_samples(&game, 0, 0, &spec((games / 4).max(4), 99));
+    let stat = |s: &[Sample]| -> (f32, f32, f32, f32) {
+        let n = s.len() as f32;
+        let unif: f32 = s.iter().map(|x| (x.pi.len() as f32).ln()).sum::<f32>() / n;
+        let ent: f32 = s.iter().map(|x| -x.pi.iter().filter(|p| **p > 0.0).map(|p| p * p.ln()).sum::<f32>()).sum::<f32>() / n;
+        let branch: f32 = s.iter().map(|x| x.pi.len() as f32).sum::<f32>() / n;
+        let forced: f32 = s.iter().filter(|x| x.pi.len() == 1).count() as f32 / n;
+        (unif, ent, branch, forced)
+    };
+    let (u, h, b, f) = stat(&tr);
+    println!("data: {} train / {} val positions; mean legal actions {b:.1} ({:.0}% forced)", tr.len(), va.len(), f * 100.0);
+    println!("train targets: uniform-policy CE {u:.3}, target entropy {h:.3} (CE floor for a perfect imitator; gap {:.3} = max learnable gain)", u - h);
+    let (u2, h2, _, _) = stat(&va);
+    println!("val   targets: uniform CE {u2:.3}, entropy {h2:.3}");
+    let dev0 = devices[0].clone();
+    B::seed(&dev0, 1);
+    let m = OmniAstra::<B>::new(&mcfg, &dev0);
+    let tcfg = TrainCfg { steps, batch, lr, ..Default::default() };
+    let mut t = Trainer::<B>::new(m, mcfg.clone(), tcfg, devices);
+    let pools = vec![Pool { game_idx: 0, family_idx: 0, samples: tr.clone() }];
+    let mut sampler = MixSampler::new(&pools, &MixSpec::UniformByGame, 3);
+    let trr: Vec<&Sample> = tr.iter().take(400).collect();
+    let var: Vec<&Sample> = va.iter().take(400).collect();
+    let every = (steps / 8).max(1);
+    for step in 0..=steps {
+        if step % every == 0 {
+            let m = t.valid();
+            let a = evaluate_dataset::<B::InnerBackend>(&m, &mcfg, &trr, 64, &dev0).overall;
+            let v = evaluate_dataset::<B::InnerBackend>(&m, &mcfg, &var, 64, &dev0).overall;
+            println!("step {step:>5}: train CE {:.3} top1 {:.3} | val CE {:.3} top1 {:.3} vMSE {:.3} vSignAcc {:.2}", a.policy_ce, a.top1, v.policy_ce, v.top1, v.value_mse, v.value_sign_acc);
+        }
+        if step < steps {
+            t.train_step(&sampler.next_batch(batch));
+        }
+    }
+    Ok(())
+}

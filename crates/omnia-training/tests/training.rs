@@ -1,5 +1,5 @@
 use burn::backend::{Autodiff, NdArray};
-use burn::module::Module;
+use burn::module::{AutodiffModule, Module};
 use burn::optim::{Optimizer, SgdConfig};
 use burn::tensor::backend::Backend;
 use omnia_engine::*;
@@ -183,5 +183,34 @@ impl<B: Backend> Debug1 for omnia_model::layers::Block<B> {
         let x = burn::tensor::Tensor::<B, 3>::ones([1, 4, nano().d_model], &dev);
         let mask = burn::tensor::Tensor::<B, 2>::ones([1, 4], &dev);
         self.forward(x, None, mask).into_data().to_vec().unwrap()
+    }
+}
+
+#[test]
+fn model_moved_from_inference_to_autodiff_trains_after_enable_grad() {
+    // Regression: `valid().train()` silently drops gradient tracking; the transfer
+    // runner relies on `enable_grad` to fine-tune pretrained models.
+    let g = game(Family::Engine, 5);
+    let samples = data(&g, 0, 3);
+    let refs: Vec<&Sample> = samples.iter().take(16).collect();
+    let dev: <AB as burn::tensor::backend::BackendTypes>::Device = Default::default();
+    let inner = OmniAstra::<AB>::new(&nano(), &dev).valid();
+    let probe = |m: &OmniAstra<AB>| -> Vec<f32> {
+        let h = HostBatch::build(&refs, BatchOpts { n_reg: nano().n_reg, mask_ids: false });
+        let bt = Batch::<AB>::from_host(&h, &dev);
+        m.forward(&bt).value.into_data().to_vec().unwrap()
+    };
+    for (enable, expect_change) in [(false, false), (true, true)] {
+        let mut m = inner.clone().train::<AB>();
+        if enable {
+            m = m.enable_grad();
+        }
+        let before = probe(&m);
+        let mut t = Trainer::<AB>::new(m, nano(), TrainCfg { lr: 1e-2, ..Default::default() }, vec![dev.clone()]);
+        for _ in 0..5 {
+            t.train_step(&refs);
+        }
+        let changed = before != probe(&t.model);
+        assert_eq!(changed, expect_change, "enable_grad={enable}");
     }
 }

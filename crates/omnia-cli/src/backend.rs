@@ -125,6 +125,10 @@ pub fn run_selfplay(config: &Path, games_dir: &Path, n_devices: usize) -> Result
     omnia_eval::jobs::selfplay_job::<AB>(&job, games_dir, devices(n_devices))
 }
 
+pub fn run_diagnose(game: Arc<Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64) -> Result<()> {
+    omnia_eval::jobs::diagnose::<AB>(game, model, sims, games, steps, batch, lr, devices(1))
+}
+
 pub fn run_eval(checkpoint: &Path, model: &str, game: Arc<Game>, game_idx: u32, opponents: &[String], games: u32) -> Result<()> {
     omnia_eval::jobs::eval_checkpoint::<AB>(checkpoint, model, &None, game, game_idx, opponents, games, devices(1).remove(0))?;
     Ok(())
