@@ -1,0 +1,26 @@
+[package]
+name = "omnia-model"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["ndarray"]
+ndarray = ["burn/ndarray"]
+cuda = ["burn/cuda"]
+wgpu = ["burn/wgpu"]
+flex = ["burn/flex"]
+simd = ["burn/simd"]
+openblas = ["burn/openblas-system"]
+cpu = ["burn/cpu"]
+candle = ["burn/candle"]
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-observation = { path = "../omnia-observation" }
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+omnia-engine = { path = "../omnia-engine" }
+omnia-gen = { path = "../omnia-gen" }

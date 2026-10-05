@@ -1,0 +1,18 @@
+[package]
+name = "omnia-eval"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-engine = { path = "../omnia-engine" }
+omnia-observation = { path = "../omnia-observation" }
+omnia-search = { path = "../omnia-search" }
+omnia-gen = { path = "../omnia-gen" }
+omnia-model = { path = "../omnia-model", default-features = false }
+omnia-training = { path = "../omnia-training", default-features = false }
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff"] }
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+anyhow.workspace = true

@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
 pub const NCAT: usize = 6;
+/// Game-independent categorical features (relative seats, generic event kinds, ...).
+pub const NSEM: usize = 4;
 pub const NNUM: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,8 @@ pub enum TokClass {
     Action = 5,
 }
 pub const NUM_CLASSES: usize = 6;
+
+pub mod batch;
 
 /// Relation types (directed, from -> to). 0 means "none".
 pub mod rel {
@@ -55,15 +59,25 @@ pub mod rel {
     pub const ACT_TARGET_PLAYER: u8 = 17; // action -> player
     pub const STACK_ITEM: u8 = 18; // global -> object (source of a pending stack item)
     pub const NUM_BASE: usize = 19;
-    /// Total relation ids including inverses (0 = none).
-    pub const NUM_TOTAL: usize = 1 + 2 * (NUM_BASE - 1) + 1;
+    /// Inverse of base relation `k` (1..NUM_BASE) is `k + INV`.
+    pub const INV: u8 = (NUM_BASE - 1) as u8;
+    /// Register -> token, token -> register, register <-> register.
+    pub const REG_TO_TOK: u8 = 2 * INV + 1;
+    pub const TOK_TO_REG: u8 = 2 * INV + 2;
+    pub const REG_REG: u8 = 2 * INV + 3;
+    /// Size of the relation-id vocabulary (0 = none).
+    pub const VOCAB: usize = 2 * INV as usize + 4;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Token {
     pub class: TokClass,
-    /// Categorical features; 0 = absent/padding.
+    /// Game-local categorical ids (template, action def, zone def, ...);
+    /// 0 = absent/padding. Their meaning is arbitrary per game.
     pub cat: [u16; NCAT],
+    /// Game-independent categorical features (relative seat, generic event
+    /// kind, visibility class, counts); 0 = absent.
+    pub sem: [u8; NSEM],
     /// Numeric features (raw, unscaled); valid where `num_mask` bit is set.
     pub num: [f32; NNUM],
     pub num_mask: u16,
@@ -75,7 +89,7 @@ pub struct Token {
 
 impl Token {
     fn new(class: TokClass) -> Token {
-        Token { class, cat: [0; NCAT], num: [0.0; NNUM], num_mask: 0, desc: [0.0; DESC_DIM], time: 0 }
+        Token { class, cat: [0; NCAT], sem: [0; NSEM], num: [0.0; NNUM], num_mask: 0, desc: [0.0; DESC_DIM], time: 0 }
     }
     fn set(&mut self, slot: usize, v: f32) {
         self.num[slot] = v;
@@ -216,6 +230,7 @@ impl Tokenizer {
         g.cat[1] = v.phase as u16 + 1;
         g.cat[2] = v.active_rel as u16 + 1;
         g.cat[3] = if v.decider_rel == NO_REL { 0 } else { v.decider_rel as u16 + 1 };
+        g.sem = [v.active_rel + 1, if v.decider_rel == NO_REL { 0 } else { v.decider_rel + 1 }, n as u8, 0];
         g.set(0, v.turn as f32);
         g.set(1, v.stack.len() as f32);
         g.set(2, n as f32);
@@ -229,6 +244,7 @@ impl Tokenizer {
         for p in &v.players {
             let mut t = Token::new(TokClass::Player);
             t.cat[0] = p.rel as u16 + 1;
+            t.sem = [p.rel + 1, (v.decider_rel == p.rel) as u8 + 1, (v.active_rel == p.rel) as u8 + 1, 0];
             for (i, r) in p.resources.iter().enumerate().take(game.def.resources.len()) {
                 if let Some(x) = r {
                     t.set(i, *x as f32);
@@ -246,6 +262,17 @@ impl Tokenizer {
             let mut t = Token::new(TokClass::Zone);
             t.cat[0] = z.def as u16 + 1;
             t.cat[2] = if z.owner_rel == NO_REL { 0 } else { z.owner_rel as u16 + 1 };
+            let zd = &game.def.zones[z.def as usize];
+            t.sem = [
+                if z.owner_rel == NO_REL { 0 } else { z.owner_rel + 1 },
+                zd.ordered as u8 + 1,
+                match zd.vis {
+                    Visibility::Public => 1,
+                    Visibility::Private => 2,
+                    Visibility::Hidden => 3,
+                },
+                zd.capacity.is_some() as u8 + 1,
+            ];
             t.set(0, z.size as f32);
             t.set(1, z.visible.len() as f32);
             t.desc = d.zones[z.def as usize];
@@ -269,6 +296,16 @@ impl Tokenizer {
             t.cat[3] = o.controller_rel as u16 + 1;
             let zdef = v.zones[o.zone as usize].def;
             t.cat[4] = zdef as u16 + 1;
+            t.sem = [
+                o.owner_rel + 1,
+                o.controller_rel + 1,
+                match game.def.zones[zdef as usize].vis {
+                    Visibility::Public => 1,
+                    Visibility::Private => 2,
+                    Visibility::Hidden => 3,
+                },
+                o.attached_to.is_some() as u8 + 1,
+            ];
             for a in 0..game.def.attrs.len() {
                 t.set(a, o.attrs[a] as f32);
             }
@@ -302,6 +339,12 @@ impl Tokenizer {
             let mut t = Token::new(TokClass::Event);
             t.time = i as u32;
             t.cat[0] = event_kind_id(e.kind);
+            t.sem = [
+                event_kind_id(e.kind) as u8,
+                if e.actor_rel == NO_REL { 0 } else { e.actor_rel + 1 },
+                e.source.template.is_some() as u8 + 1,
+                (e.before.is_some()) as u8 + 1,
+            ];
             t.cat[1] = clampu(e.slot + 1, 63);
             t.cat[2] = if e.actor_rel == NO_REL { 0 } else { e.actor_rel as u16 + 1 };
             t.cat[3] = e.source.template.map(|x| x + 1).unwrap_or(0);
@@ -375,6 +418,7 @@ impl Tokenizer {
         for (ai, a) in v.actions.iter().enumerate() {
             let mut t = Token::new(TokClass::Action);
             let me = a0 + ai;
+            t.sem = [if a.def == PASS_DEF { 1 } else { 2 }, a.targets.len() as u8 + 1, a.source.is_some() as u8 + 1, a.costs.iter().filter(|c| c.1 > 0).count().min(6) as u8 + 1];
             if a.def == PASS_DEF {
                 t.cat[0] = 1;
             } else {

@@ -1,0 +1,29 @@
+[package]
+name = "omnia-training"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["ndarray"]
+ndarray = ["omnia-model/ndarray"]
+cuda = ["omnia-model/cuda", "burn/cuda"]
+wgpu = ["omnia-model/wgpu", "burn/wgpu"]
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-engine = { path = "../omnia-engine" }
+omnia-observation = { path = "../omnia-observation" }
+omnia-search = { path = "../omnia-search" }
+omnia-model = { path = "../omnia-model", default-features = false }
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff", "train"] }
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+bincode = "1"
+blake3.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+omnia-gen = { path = "../omnia-gen" }
+burn = { version = "0.21", default-features = false, features = ["std", "autodiff", "ndarray"] }
+tempfile = "3"
