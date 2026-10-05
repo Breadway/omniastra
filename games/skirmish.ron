@@ -1,0 +1,108 @@
+#![enable(implicit_some)]
+// Skirmish: creature combat on a mana curve. Hidden hands/decks, high interaction,
+// short horizon. (Authoring notes: resources 0=life 1=energy 2=max_energy;
+// attrs 0=cost 1=power 2=health 3=exhausted 4=fresh; zones 0=deck 1=hand 2=board 3=discard.)
+GameDef(
+    name: "skirmish",
+    num_players: 2,
+    resources: [
+        (name: "life", initial: 20, min: -50, max: 40, public: true),
+        (name: "energy", initial: 0, min: 0, max: 10, public: true),
+        (name: "max_energy", initial: 0, min: 0, max: 6, public: true),
+    ],
+    attrs: [
+        (name: "cost", default: 0, min: 0, max: 10),
+        (name: "power", default: 0, min: 0, max: 12),
+        (name: "health", default: 0, min: -50, max: 30),
+        (name: "exhausted", default: 0, min: 0, max: 1),
+        (name: "fresh", default: 0, min: 0, max: 1),
+    ],
+    zones: [
+        (name: "deck", per_player: true, ordered: true, vis: Hidden),
+        (name: "hand", per_player: true, ordered: false, vis: Private, capacity: 7),
+        (name: "board", per_player: true, ordered: true, vis: Public, capacity: 5),
+        (name: "discard", per_player: true, ordered: true, vis: Public),
+    ],
+    hooks: ["on_play"],
+    templates: [
+        (name: "grunt", kind: 0, attrs: [(0, 1), (1, 1), (2, 2)]),
+        (name: "soldier", kind: 0, attrs: [(0, 2), (1, 2), (2, 3)]),
+        (name: "brute", kind: 0, attrs: [(0, 3), (1, 3), (2, 4)]),
+        (name: "giant", kind: 0, attrs: [(0, 5), (1, 5), (2, 6)]),
+        (name: "fireball", kind: 1, attrs: [(0, 2)], hooks: [(0, ModRes(Opp, 0, Const(-4)))]),
+        (name: "rally", kind: 1, attrs: [(0, 1)], hooks: [(0, ForEach(
+            Zones(zones: [(who: Me, zone: 2)], order: All),
+            ModAttr(One(Iter), 1, Const(1))))]),
+    ],
+    player_setup: [
+        (zone: 0, template: 0, count: 6),
+        (zone: 0, template: 1, count: 6),
+        (zone: 0, template: 2, count: 5),
+        (zone: 0, template: 3, count: 3),
+        (zone: 0, template: 4, count: 5),
+        (zone: 0, template: 5, count: 5),
+    ],
+    setup: ForEachPlayer(All, Seq([
+        Shuffle((who: Me, zone: 0)),
+        Move(what: Zones(zones: [(who: Me, zone: 0)], order: Top(Const(4))), to: (who: Me, zone: 1), pos: Top),
+    ])),
+    phases: [
+        (name: "refresh", auto_end: true, on_enter: Seq([
+            ModRes(Me, 2, Const(1)),
+            SetRes(Me, 1, Res(Me, 2)),
+            ForEach(Zones(zones: [(who: Me, zone: 2)], order: All), Seq([
+                SetAttr(One(Iter), 3, Const(0)),
+                SetAttr(One(Iter), 4, Const(0)),
+            ])),
+            If(Exists(Zones(zones: [(who: Me, zone: 0)], order: All)),
+                Move(what: Zones(zones: [(who: Me, zone: 0)], order: Top(Const(1))), to: (who: Me, zone: 1), pos: Top),
+                Lose(Me)),
+        ])),
+        (name: "main"),
+    ],
+    actions: [
+        (name: "play_creature", class: 0, phases: [1], timing: Main,
+            source: (zones: [(who: Me, zone: 1)], filter: Cmp(Kind(Iter), Eq, Const(0))),
+            costs: [(1, Attr(Source, 0))],
+            require: HasRoom((who: Me, zone: 2)),
+            effect: Seq([
+                Move(what: One(Source), to: (who: Me, zone: 2), pos: Bottom),
+                SetAttr(One(Source), 4, Const(1)),
+            ])),
+        (name: "cast_spell", class: 1, phases: [1], timing: Main,
+            source: (zones: [(who: Me, zone: 1)], filter: Cmp(Kind(Iter), Eq, Const(1))),
+            costs: [(1, Attr(Source, 0))],
+            effect: Seq([
+                Hook(Source, 0),
+                Move(what: One(Source), to: (who: Me, zone: 3), pos: Top),
+            ])),
+        (name: "attack_creature", class: 2, phases: [1], timing: Main,
+            source: (zones: [(who: Me, zone: 2)], filter: And([
+                Cmp(Attr(Iter, 3), Eq, Const(0)), Cmp(Attr(Iter, 4), Eq, Const(0))])),
+            targets: [Object(Zones(zones: [(who: Opp, zone: 2)], order: All))],
+            effect: Seq([
+                ModAttr(One(Target(0)), 2, Neg(Attr(Source, 1))),
+                ModAttr(One(Source), 2, Neg(Attr(Target(0), 1))),
+                SetAttr(One(Source), 3, Const(1)),
+            ])),
+        (name: "attack_face", class: 3, phases: [1], timing: Main,
+            source: (zones: [(who: Me, zone: 2)], filter: And([
+                Cmp(Attr(Iter, 3), Eq, Const(0)), Cmp(Attr(Iter, 4), Eq, Const(0))])),
+            targets: [Player(Others)],
+            require: Not(Exists(Zones(zones: [(who: Opp, zone: 2)], order: All))),
+            effect: Seq([
+                ModRes(Opp, 0, Neg(Attr(Source, 1))),
+                SetAttr(One(Source), 3, Const(1)),
+            ])),
+        (name: "end_turn", class: 4, phases: [1], timing: Main, effect: EndTurn),
+    ],
+    triggers: [
+        (on: AttrChanged,
+            cond: And([Cmp(EventSlot, Eq, Const(2)), Cmp(Attr(EventObj, 2), Le, Const(0))]),
+            effect: Move(what: One(EventObj), to: (who: OwnerOf(EventObj), zone: 3), pos: Top)),
+    ],
+    terminal: [(cond: Cmp(Res(Me, 0), Le, Const(0)), result: Lose)],
+    timeout: ByResource(0),
+    limits: (max_turns: 40, max_steps: 4000, max_trigger_depth: 24, max_actions: 128, max_objects: 160, max_stack: 8, max_decisions: 600),
+    meta: (family: "manual"),
+)

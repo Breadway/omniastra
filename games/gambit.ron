@@ -1,0 +1,65 @@
+#![enable(implicit_some)]
+// Gambit: points race with a stack and counterspells (reaction/chain
+// mechanics, hidden hands). (resources 0=points 1=focus; attrs 0=cost;
+// zones 0=deck 1=hand 2=discard 3=limbo(shared, public); kinds 0=action 1=counter)
+GameDef(
+    name: "gambit",
+    num_players: 2,
+    resources: [
+        (name: "points", initial: 0, min: 0, max: 20, public: true),
+        (name: "focus", initial: 0, min: 0, max: 6, public: true),
+    ],
+    attrs: [(name: "cost", default: 0, min: 0, max: 6)],
+    zones: [
+        (name: "deck", per_player: true, ordered: true, vis: Hidden),
+        (name: "hand", per_player: true, ordered: false, vis: Private, capacity: 8),
+        (name: "discard", per_player: true, ordered: true, vis: Public),
+        (name: "limbo", per_player: false, ordered: true, vis: Public),
+    ],
+    hooks: ["on_resolve"],
+    templates: [
+        (name: "surge", kind: 0, attrs: [(0, 1)], hooks: [(0, ModRes(Me, 0, Const(1)))]),
+        (name: "burst", kind: 0, attrs: [(0, 3)], hooks: [(0, ModRes(Me, 0, Const(3)))]),
+        (name: "drain", kind: 0, attrs: [(0, 2)], hooks: [(0, Seq([ModRes(Me, 0, Const(1)), ModRes(Opp, 0, Const(-1))]))]),
+        (name: "foresight", kind: 0, attrs: [(0, 1)], hooks: [(0, Move(
+            what: Zones(zones: [(who: Me, zone: 0)], order: Top(Const(2))), to: (who: Me, zone: 1), pos: Top))]),
+        (name: "counter", kind: 1, attrs: [(0, 1)]),
+    ],
+    player_setup: [
+        (zone: 0, template: 0, count: 7),
+        (zone: 0, template: 1, count: 4),
+        (zone: 0, template: 2, count: 5),
+        (zone: 0, template: 3, count: 5),
+        (zone: 0, template: 4, count: 7),
+    ],
+    setup: ForEachPlayer(All, Seq([
+        Shuffle((who: Me, zone: 0)),
+        Move(what: Zones(zones: [(who: Me, zone: 0)], order: Top(Const(5))), to: (who: Me, zone: 1), pos: Top),
+    ])),
+    phases: [
+        (name: "draw", auto_end: true, on_enter: Seq([
+            SetRes(Me, 1, Const(3)),
+            If(Exists(Zones(zones: [(who: Me, zone: 0)], order: All)),
+                Move(what: Zones(zones: [(who: Me, zone: 0)], order: Top(Const(1))), to: (who: Me, zone: 1), pos: Top),
+                Lose(Me)),
+        ])),
+        (name: "main"),
+    ],
+    actions: [
+        (name: "cast", class: 0, phases: [1], timing: Main, stack: true,
+            source: (zones: [(who: Me, zone: 1)], filter: Cmp(Kind(Iter), Eq, Const(0))),
+            costs: [(1, Attr(Source, 0))],
+            on_use: Move(what: One(Source), to: (who: Shared, zone: 3), pos: Bottom),
+            effect: Seq([Hook(Source, 0), Move(what: One(Source), to: (who: Me, zone: 2), pos: Top)])),
+        (name: "counter", class: 1, timing: Response, stack: true,
+            source: (zones: [(who: Me, zone: 1)], filter: Cmp(Kind(Iter), Eq, Const(1))),
+            costs: [(1, Attr(Source, 0))],
+            on_use: Move(what: One(Source), to: (who: Shared, zone: 3), pos: Bottom),
+            effect: Seq([CancelStack, Move(what: One(Source), to: (who: Me, zone: 2), pos: Top)])),
+        (name: "end_turn", class: 2, phases: [1], timing: Main, effect: EndTurn),
+    ],
+    terminal: [(cond: Cmp(Res(Me, 0), Ge, Const(8)), result: Win)],
+    timeout: ByResource(0),
+    limits: (max_turns: 30, max_steps: 4000, max_trigger_depth: 24, max_actions: 128, max_objects: 160, max_stack: 8, max_decisions: 600),
+    meta: (family: "manual"),
+)

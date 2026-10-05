@@ -1,0 +1,73 @@
+#![enable(implicit_some)]
+// Merchant: shared-market engine building. No combat, low interaction, long
+// horizon. (resources 0=vp 1=gold 2=income; attrs 0=cost 1=vp 2=income;
+// zones 0=market(shared) 1=supply(shared,hidden) 2=tableau)
+GameDef(
+    name: "merchant",
+    num_players: 2,
+    resources: [
+        (name: "vp", initial: 0, min: 0, max: 40, public: true),
+        (name: "gold", initial: 0, min: 0, max: 30, public: true),
+        (name: "income", initial: 1, min: 0, max: 10, public: true),
+    ],
+    attrs: [
+        (name: "cost", default: 0, min: 0, max: 10),
+        (name: "vp", default: 0, min: 0, max: 10),
+        (name: "income", default: 0, min: 0, max: 10),
+    ],
+    zones: [
+        (name: "market", per_player: false, ordered: true, vis: Public, capacity: 4),
+        (name: "supply", per_player: false, ordered: true, vis: Hidden),
+        (name: "tableau", per_player: true, ordered: true, vis: Public),
+    ],
+    templates: [
+        (name: "stall", kind: 0, attrs: [(0, 2), (1, 0), (2, 1)]),
+        (name: "workshop", kind: 0, attrs: [(0, 4), (1, 0), (2, 2)]),
+        (name: "cart", kind: 0, attrs: [(0, 3), (1, 1), (2, 0)]),
+        (name: "manor", kind: 0, attrs: [(0, 5), (1, 2), (2, 0)]),
+        (name: "palace", kind: 0, attrs: [(0, 7), (1, 3), (2, 0)]),
+        (name: "guildhall", kind: 0, attrs: [(0, 6), (1, 1), (2, 1)]),
+    ],
+    shared_setup: [
+        (zone: 1, template: 0, count: 5),
+        (zone: 1, template: 1, count: 4),
+        (zone: 1, template: 2, count: 4),
+        (zone: 1, template: 3, count: 4),
+        (zone: 1, template: 4, count: 3),
+        (zone: 1, template: 5, count: 3),
+    ],
+    setup: Seq([
+        Shuffle((who: Shared, zone: 1)),
+        Move(what: Zones(zones: [(who: Shared, zone: 1)], order: Top(Const(4))), to: (who: Shared, zone: 0), pos: Bottom),
+    ]),
+    phases: [
+        (name: "income", auto_end: true, on_enter: ModRes(Me, 1, Res(Me, 2))),
+        (name: "main"),
+    ],
+    actions: [
+        (name: "buy", class: 0, phases: [1], timing: Main,
+            source: (zones: [(who: Shared, zone: 0)]),
+            costs: [(1, Attr(Source, 0))],
+            effect: Seq([
+                Move(what: One(Source), to: (who: Me, zone: 2), pos: Bottom),
+                ModRes(Me, 0, Attr(Source, 1)),
+                ModRes(Me, 2, Attr(Source, 2)),
+                Move(what: Zones(zones: [(who: Shared, zone: 1)], order: Top(Const(1))), to: (who: Shared, zone: 0), pos: Bottom),
+                EndTurn,
+            ])),
+        (name: "take_gold", class: 1, phases: [1], timing: Main,
+            effect: Seq([ModRes(Me, 1, Const(2)), EndTurn])),
+        (name: "refresh_market", class: 2, phases: [1], timing: Main,
+            costs: [(1, Const(1))],
+            require: Exists(Zones(zones: [(who: Shared, zone: 0)], order: All)),
+            effect: Seq([
+                ForEach(Zones(zones: [(who: Shared, zone: 0)], order: All),
+                    Move(what: One(Iter), to: (who: Shared, zone: 1), pos: Bottom)),
+                Move(what: Zones(zones: [(who: Shared, zone: 1)], order: Top(Const(4))), to: (who: Shared, zone: 0), pos: Bottom),
+            ])),
+    ],
+    terminal: [(cond: Cmp(Res(Me, 0), Ge, Const(12)), result: Win)],
+    timeout: ByResource(0),
+    limits: (max_turns: 60, max_steps: 4000, max_trigger_depth: 24, max_actions: 128, max_objects: 160, max_stack: 8, max_decisions: 800),
+    meta: (family: "manual"),
+)

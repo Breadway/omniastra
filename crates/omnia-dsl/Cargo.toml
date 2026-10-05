@@ -1,0 +1,11 @@
+[package]
+name = "omnia-dsl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ron.workspace = true
+blake3.workspace = true
+thiserror.workspace = true

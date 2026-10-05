@@ -1,0 +1,12 @@
+[package]
+name = "omnia-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
