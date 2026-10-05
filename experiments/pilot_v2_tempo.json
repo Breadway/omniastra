@@ -1,0 +1,156 @@
+{
+  "name": "pilot_v2_tempo",
+  "model": "nano",
+  "seeds": [
+    1,
+    2
+  ],
+  "groups": [
+    {
+      "id": "same_family",
+      "family": "tempo",
+      "n_games": 3,
+      "seed": 1000
+    },
+    {
+      "id": "eng",
+      "family": "engine",
+      "n_games": 2,
+      "seed": 2000
+    },
+    {
+      "id": "stk",
+      "family": "stack",
+      "n_games": 2,
+      "seed": 3000
+    },
+    {
+      "id": "tug",
+      "family": "tug",
+      "n_games": 2,
+      "seed": 4000
+    },
+    {
+      "id": "gar",
+      "family": "garden",
+      "n_games": 2,
+      "seed": 5000
+    },
+    {
+      "id": "same_family_rr",
+      "family": "tempo",
+      "n_games": 0,
+      "seed": 0,
+      "random_reward_of": "same_family"
+    },
+    {
+      "id": "target",
+      "family": "tempo",
+      "n_games": 2,
+      "seed": 9000
+    }
+  ],
+  "target_group": "target",
+  "pretrain_sets": {
+    "same_family": [
+      "same_family"
+    ],
+    "other_families": [
+      "eng",
+      "stk",
+      "tug",
+      "gar"
+    ],
+    "same_family_rr": [
+      "same_family_rr"
+    ]
+  },
+  "data": {
+    "sims": 64,
+    "pretrain_games_per_game": 40,
+    "target_train_games": 50,
+    "target_val_games": 12,
+    "epsilon": 0.1,
+    "temp_moves": 10,
+    "max_history": 12,
+    "target_temp": 0.2
+  },
+  "pretrain": {
+    "steps": 1500,
+    "batch": 32,
+    "lr": 0.002,
+    "mix": "UniformByGame"
+  },
+  "finetune": {
+    "budgets": [
+      250,
+      750,
+      2250
+    ],
+    "steps": 300,
+    "batch": 16,
+    "lr": 0.002,
+    "eval_every": 50,
+    "val_positions": 400
+  },
+  "arms": [
+    {
+      "name": "scratch",
+      "pretrain": null,
+      "reuse": "Full",
+      "freeze": "None"
+    },
+    {
+      "name": "scratch_x3_steps",
+      "pretrain": null,
+      "reuse": "Full",
+      "freeze": "None",
+      "ft_steps_mult": 3.0
+    },
+    {
+      "name": "pre_same_full",
+      "pretrain": "same_family",
+      "reuse": "Full",
+      "freeze": "None"
+    },
+    {
+      "name": "pre_same_backbone",
+      "pretrain": "same_family",
+      "reuse": "Backbone",
+      "freeze": "None"
+    },
+    {
+      "name": "pre_same_frozen",
+      "pretrain": "same_family",
+      "reuse": "Backbone",
+      "freeze": "Backbone"
+    },
+    {
+      "name": "pre_other_full",
+      "pretrain": "other_families",
+      "reuse": "Full",
+      "freeze": "None"
+    },
+    {
+      "name": "pre_other_backbone",
+      "pretrain": "other_families",
+      "reuse": "Backbone",
+      "freeze": "None"
+    },
+    {
+      "name": "pre_rr_same_full",
+      "pretrain": "same_family_rr",
+      "reuse": "Full",
+      "freeze": "None"
+    }
+  ],
+  "eval": {
+    "games": 24,
+    "opponents": [
+      "random",
+      "mcts:16"
+    ],
+    "batch": 64
+  },
+  "out_dir": "runs/pilot_v2_tempo"
+}
