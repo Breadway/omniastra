@@ -87,8 +87,11 @@ impl HostBatch {
     pub fn build(samples: &[&Sample], opts: BatchOpts) -> HostBatch {
         let b = samples.len();
         let r = opts.n_reg;
-        let ns = samples.iter().map(|s| s.obs.n_state()).max().unwrap_or(1);
-        let na = samples.iter().map(|s| s.obs.n_actions()).max().unwrap_or(1).max(1);
+        // Pad to bucketed sizes so GPU backends (which compile/autotune per tensor
+        // shape) only ever see a handful of distinct shapes. Padding is masked.
+        let round_up = |x: usize, m: usize| x.div_ceil(m) * m;
+        let ns = round_up(samples.iter().map(|s| s.obs.n_state()).max().unwrap_or(1), 16);
+        let na = round_up(samples.iter().map(|s| s.obs.n_actions()).max().unwrap_or(1).max(1), 8);
         let kn = r + ns;
         let mut hb = HostBatch { b, n_reg: r, ns, na, ..Default::default() };
         hb.s_class = vec![0.0; b * ns * NUM_CLASSES];
