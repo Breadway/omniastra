@@ -1,0 +1,22 @@
+{
+  "name": "smoke",
+  "model": "nano",
+  "seeds": [1],
+  "groups": [
+    {"id": "pre_engine", "family": "engine", "n_games": 1, "seed": 100},
+    {"id": "pre_tempo", "family": "tempo", "n_games": 1, "seed": 200},
+    {"id": "target", "family": "garden", "n_games": 1, "seed": 900}
+  ],
+  "target_group": "target",
+  "pretrain_sets": {"related": ["pre_engine"], "other": ["pre_tempo"]},
+  "data": {"sims": 8, "pretrain_games_per_game": 8, "target_train_games": 10, "target_val_games": 4, "epsilon": 0.1, "temp_moves": 8, "max_history": 12},
+  "pretrain": {"steps": 20, "batch": 16, "lr": 0.003, "mix": "UniformByGame"},
+  "finetune": {"budgets": [100, 300], "steps": 20, "batch": 16, "lr": 0.002, "eval_every": 10, "val_positions": 100},
+  "arms": [
+    {"name": "scratch", "pretrain": null, "reuse": "Full", "freeze": "None"},
+    {"name": "pre_related", "pretrain": "related", "reuse": "Full", "freeze": "None"},
+    {"name": "pre_other_backbone", "pretrain": "other", "reuse": "Backbone", "freeze": "None"}
+  ],
+  "eval": {"games": 6, "opponents": ["random", "mcts:8"], "batch": 64},
+  "out_dir": "runs/smoke"
+}

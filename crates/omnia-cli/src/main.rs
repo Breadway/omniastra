@@ -393,10 +393,14 @@ fn benchmark(game: Option<PathBuf>, model: &str, batch: usize) -> Result<()> {
     let mut mcts = Mcts::new(MctsConfig { sims: 100, ..Default::default() }, RolloutEval::new(&g.def));
     let mut st = State::new(&g, 9);
     let mut rng = Rng::new(9);
-    for _ in 0..6 {
+    while st.is_terminal() || st.legal_actions().len() < 3 {
+        if st.is_terminal() {
+            st = State::new(&g, rng.next_u64());
+        }
         let k = st.legal_actions().len();
         st.apply(rng.below(k as u64) as usize);
     }
+    let t = Instant::now();
     let _ = mcts.search(&mut st, &mut rng);
     println!("mcts(100 sims, random rollouts): {:.1} ms/move", t.elapsed().as_secs_f64() * 1000.0);
 
