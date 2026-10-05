@@ -143,22 +143,41 @@ impl State {
         let mut local = vec![u16::MAX; self.objs.len()];
         let mut order: Vec<ObjId> = vec![];
         let mut zones = vec![];
-        for (inst, members) in self.zones.iter().enumerate() {
+        for inst in 0..self.zones.len() {
+            let members = self.zones[inst].clone();
             let (zdef, owner) = g.inst[inst];
-            let mut visible = vec![];
-            for o in members {
-                if self.obj_mask(*o) & bit != 0 {
-                    local[*o as usize] = order.len() as u16;
-                    visible.push(order.len() as u16);
-                    order.push(*o);
+            let mut vis_objs: Vec<ObjId> = members.iter().copied().filter(|o| self.obj_mask(*o) & bit != 0).collect();
+            if !g.def.zones[zdef as usize].ordered {
+                // Canonical order for unordered zones: insertion order must not
+                // leak (e.g. draw order), so sort by visible content.
+                let mut keyed: Vec<(Vec<i32>, ObjId)> = vec![];
+                for o in vis_objs.drain(..) {
+                    let mut key = vec![self.objs[o as usize].template as i32];
+                    for a in 0..g.def.attrs.len() {
+                        key.push(self.attr_eff(o, a as u8, false));
+                    }
+                    keyed.push((key, o));
                 }
+                keyed.sort();
+                vis_objs = keyed.into_iter().map(|(_, o)| o).collect();
+            }
+            let mut visible = vec![];
+            for o in vis_objs {
+                local[o as usize] = order.len() as u16;
+                visible.push(order.len() as u16);
+                order.push(o);
             }
             zones.push(ZoneView { def: zdef, owner_rel: self.rel(me, owner), size: members.len() as u16, visible });
         }
         let mut objects = vec![];
         for o in &order {
             let ob = self.objs[*o as usize].clone();
-            let pos = self.zones[ob.zone as usize].iter().position(|x| x == o).unwrap_or(0) as u16;
+            let zinst = ob.zone as usize;
+            let pos = if g.def.zones[g.inst[zinst].0 as usize].ordered {
+                self.zones[zinst].iter().position(|x| x == o).unwrap_or(0) as u16
+            } else {
+                0
+            };
             let mut attrs = [0; MAX_ATTRS];
             for a in 0..g.def.attrs.len() {
                 attrs[a] = self.attr_eff(*o, a as u8, false);
@@ -344,6 +363,13 @@ impl State {
         st.legal.clear();
         st.advance();
         st
+    }
+
+    /// Test support: scramble the internal order of a zone instance.
+    pub fn permute_zone_for_test(&mut self, inst: usize, rng: &mut Rng) {
+        let mut z = std::mem::take(&mut self.zones[inst]);
+        rng.shuffle(&mut z);
+        self.zones[inst] = z;
     }
 
     /// Index of `a` in the current legal-action list.

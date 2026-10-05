@@ -147,3 +147,34 @@ fn stack_and_counters_work_in_gambit() {
     }
     assert!(saw_cancel, "no counter ever cancelled a spell in 300 random games");
 }
+
+#[test]
+fn relabelled_games_are_mechanically_equivalent() {
+    use omnia_dsl::Relabel;
+    for name in GAMES {
+        let path = format!("{}/../../games/{}.ron", env!("CARGO_MANIFEST_DIR"), name);
+        let def = GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut rr = Rng::new(77);
+        let rl = Relabel::random(&def, |n| rr.below(n));
+        let def2 = rl.apply(&def);
+        def2.check().unwrap_or_else(|e| panic!("{name}: relabelled game invalid: {e}"));
+        assert_ne!(def.hash64(), def2.hash64());
+        let g1 = Game::new(def).unwrap();
+        let g2 = Game::new(def2).unwrap();
+        let stats = |g: &Arc<Game>| {
+            let (mut w0, mut dec) = (0.0f64, 0.0f64);
+            let n = 400;
+            for s in 0..n {
+                let (_, st) = playout(g, s);
+                assert!(st.fault().is_none());
+                w0 += (st.payoffs().unwrap()[0] > 0.0) as u8 as f64;
+                dec += st.decisions() as f64;
+            }
+            (w0 / n as f64, dec / n as f64)
+        };
+        let (a, b) = (stats(&g1), stats(&g2));
+        println!("{name}: orig {:?} relabelled {:?}", a, b);
+        assert!((a.0 - b.0).abs() < 0.1, "{name}: win rate differs {a:?} vs {b:?}");
+        assert!((a.1 - b.1).abs() / a.1 < 0.1, "{name}: length differs {a:?} vs {b:?}");
+    }
+}

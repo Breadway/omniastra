@@ -1,0 +1,12 @@
+[package]
+name = "omnia-gen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-engine = { path = "../omnia-engine" }
+omnia-search = { path = "../omnia-search" }
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true

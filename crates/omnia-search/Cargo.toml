@@ -1,0 +1,8 @@
+[package]
+name = "omnia-search"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-engine = { path = "../omnia-engine" }

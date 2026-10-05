@@ -3,10 +3,12 @@
 
 pub mod analysis;
 pub mod ir;
+pub mod relabel;
 pub mod validate;
 
 pub use analysis::{analyze, Desc, GameDescriptors, DESC_DIM};
 pub use ir::*;
+pub use relabel::Relabel;
 pub use validate::validate;
 
 use thiserror::Error;

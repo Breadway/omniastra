@@ -270,6 +270,12 @@ impl State {
             }
             _ => {}
         }
+        if g.def.adjudication == Adjudication::Random && !matches!(reason, EndReason::Fault(_)) {
+            let w = self.rng.below(n as u64) as usize;
+            for p in 0..n {
+                pay[p] = if p == w { 1.0 } else { -1.0 };
+            }
+        }
         self.outcome = Some(Outcome { payoffs: pay, reason });
         self.legal.clear();
         let all = self.all_mask();

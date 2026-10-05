@@ -351,7 +351,8 @@ pub fn validate(g: &GameDef) -> Vec<String> {
         for (a, _) in &t.attrs {
             limit!((*a as usize) < g.attrs.len(), format!("template {}: attr out of range", ti));
         }
-        let hs = Scope { source: true, ..Default::default() };
+        // Hooks run on behalf of an action and may refer to its targets.
+        let hs = Scope { source: true, ntargets: MAX_TARGETS, ..Default::default() };
         for (h, e) in &t.hooks {
             v.ctx = format!("template {} ({}) hook {}", ti, t.name, h);
             if (*h as usize) >= g.hooks.len() {

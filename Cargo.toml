@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/omnia-dsl", "crates/omnia-engine"]
+members = ["crates/omnia-dsl", "crates/omnia-engine", "crates/omnia-observation", "crates/omnia-search", "crates/omnia-gen"]
 
 [workspace.package]
 version = "0.1.0"

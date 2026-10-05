@@ -66,6 +66,11 @@ pub struct GameDef {
     pub terminal: Vec<TerminalRule>,
     #[serde(default)]
     pub timeout: Timeout,
+    /// How final payoffs are assigned. `Random` is an experimental control:
+    /// the game ends exactly as it normally would, but the winner is drawn
+    /// uniformly at random, so outcomes carry no information about play.
+    #[serde(default)]
+    pub adjudication: Adjudication,
     #[serde(default)]
     pub limits: Limits,
     /// Free-form generator metadata (never read by the engine).
@@ -251,6 +256,18 @@ pub enum Timeout {
 impl Default for Timeout {
     fn default() -> Self {
         Timeout::Draw
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Adjudication {
+    Rules,
+    Random,
+}
+
+impl Default for Adjudication {
+    fn default() -> Self {
+        Adjudication::Rules
     }
 }
 

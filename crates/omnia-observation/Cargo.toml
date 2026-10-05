@@ -1,0 +1,12 @@
+[package]
+name = "omnia-observation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+omnia-dsl = { path = "../omnia-dsl" }
+omnia-engine = { path = "../omnia-engine" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
