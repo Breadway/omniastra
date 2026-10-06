@@ -7,8 +7,8 @@
 //! Layout (one flat token list, indices are global within the observation):
 //!
 //! ```text
-//! [ global | players | zones | objects | events ]  [ actions ]
-//!   \________________ state tokens _____________/    query tokens
+//! [ global | players | zones | objects | stack | events ]  [ actions ]
+//!   \_________________ state tokens ______________/         query tokens
 //! ```
 //!
 //! Relations are typed directed edges between tokens; the model adds inverse
@@ -33,8 +33,19 @@ pub enum TokClass {
     Object = 3,
     Event = 4,
     Action = 5,
+    /// One token per pending stack item (bottom of the stack first).
+    Stack = 6,
 }
-pub const NUM_CLASSES: usize = 6;
+pub const NUM_CLASSES: usize = 7;
+
+/// Game-local categorical ids used by action tokens for non-object targets.
+/// They sit above every template id (`template + 1 <= MAX_TEMPLATES`), so a
+/// target kind can never collide with a template id in the same `cat` column.
+pub const CAT_TARGET_PLAYER: u16 = MAX_TEMPLATES as u16 + 2; // + relative seat (< MAX_PLAYERS)
+pub const CAT_TARGET_NUM: u16 = CAT_TARGET_PLAYER + MAX_PLAYERS as u16;
+pub const CAT_TARGET_HIDDEN: u16 = CAT_TARGET_NUM + 1;
+/// Largest categorical id any token can carry; the model's `cat_vocab` must exceed it.
+pub const CAT_MAX: u16 = CAT_TARGET_HIDDEN;
 
 pub mod batch;
 
@@ -57,8 +68,9 @@ pub mod rel {
     pub const ACT_TARGET1: u8 = 15;
     pub const ACT_TARGET2: u8 = 16;
     pub const ACT_TARGET_PLAYER: u8 = 17; // action -> player
-    pub const STACK_ITEM: u8 = 18; // global -> object (source of a pending stack item)
-    pub const NUM_BASE: usize = 19;
+    pub const STACK_ITEM: u8 = 18; // global -> stack token
+    pub const STACK_ACTOR: u8 = 19; // stack token -> player who put it there
+    pub const NUM_BASE: usize = 20;
     /// Inverse of base relation `k` (1..NUM_BASE) is `k + INV`.
     pub const INV: u8 = (NUM_BASE - 1) as u8;
     /// Register -> token, token -> register, register <-> register.
@@ -110,6 +122,7 @@ pub struct Segments {
     pub players: Range<usize>,
     pub zones: Range<usize>,
     pub objects: Range<usize>,
+    pub stack: Range<usize>,
     pub events: Range<usize>,
     pub actions: Range<usize>,
 }
@@ -329,12 +342,30 @@ impl Tokenizer {
             }
         }
         let o1 = toks.len();
+
+        // Stack: one token per pending item, bottom first.
+        let s0 = toks.len();
         for (i, s) in v.stack.iter().enumerate() {
-            let _ = i;
+            let mut t = Token::new(TokClass::Stack);
+            let def = &game.def.actions[s.def as usize];
+            t.cat[0] = s.def + 2;
+            t.cat[1] = def.class as u16 + 1;
+            t.cat[2] = s.source.map(|l| v.objects[l as usize].template + 1).unwrap_or(0);
+            t.sem = [if s.actor_rel == NO_REL { 0 } else { s.actor_rel + 1 }, s.source.is_some() as u8 + 1, (i + 1 == v.stack.len()) as u8 + 1, 0];
+            t.set(0, (v.stack.len() - 1 - i) as f32); // 0 = top (resolves first)
+            t.set(1, i as f32);
+            t.desc = d.actions[s.def as usize];
+            toks.push(t);
+            let me = s0 + i;
+            add_rel(0, me, rel::STACK_ITEM);
             if let Some(src) = s.source {
-                add_rel(0, o0 + src as usize, rel::STACK_ITEM);
+                add_rel(me, o0 + src as usize, rel::ACT_SOURCE);
+            }
+            if s.actor_rel != NO_REL && (s.actor_rel as usize) < n {
+                add_rel(me, p0 + s.actor_rel as usize, rel::STACK_ACTOR);
             }
         }
+        let s1 = toks.len();
 
         // History (most recent `max_history`).
         let total = v.history.len();
@@ -450,7 +481,7 @@ impl Tokenizer {
                     }
                     TargetView::Player(r) => {
                         if k < 2 {
-                            t.cat[4 + k] = 100 + *r as u16;
+                            t.cat[4 + k] = CAT_TARGET_PLAYER + (*r as u16).min(MAX_PLAYERS as u16 - 1);
                         }
                         add_rel(me, p0 + *r as usize, rel::ACT_TARGET_PLAYER);
                     }
@@ -460,12 +491,12 @@ impl Tokenizer {
                             numi += 1;
                         }
                         if k < 2 {
-                            t.cat[4 + k] = 200;
+                            t.cat[4 + k] = CAT_TARGET_NUM;
                         }
                     }
                     TargetView::HiddenObj => {
                         if k < 2 {
-                            t.cat[4 + k] = 201;
+                            t.cat[4 + k] = CAT_TARGET_HIDDEN;
                         }
                     }
                 }
@@ -494,7 +525,7 @@ impl Tokenizer {
             num_players: v.num_players,
             tokens: toks,
             relations: rels,
-            seg: Segments { global: 0, players: p0..p1, zones: z0..z1, objects: o0..o1, events: e0..e1, actions: a0..a1 },
+            seg: Segments { global: 0, players: p0..p1, zones: z0..z1, objects: o0..o1, stack: s0..s1, events: e0..e1, actions: a0..a1 },
             history_total: total,
             history_truncated: start > 0,
         }

@@ -65,3 +65,45 @@ fn unordered_zone_order_does_not_change_observation() {
         st.apply(rng.below(n as u64) as usize);
     }
 }
+
+#[test]
+fn stack_items_are_tokenized_with_def_actor_and_source() {
+    let tk = Tokenizer::new(TokenizerConfig::default());
+    let g = load("gambit");
+    let mut seen_nonempty = false;
+    for seed in 0..40 {
+        let mut st = State::new(&g, seed);
+        let mut rng = Rng::new(seed + 3);
+        while !st.is_terminal() {
+            let p = st.decision_maker().unwrap();
+            let view = st.view(p);
+            let obs = tk.observe(&mut st, p);
+            assert_eq!(obs.seg.stack.len(), view.stack.len(), "one token per stack item");
+            for (i, item) in view.stack.iter().enumerate() {
+                seen_nonempty = true;
+                let t = &obs.tokens[obs.seg.stack.start + i];
+                assert_eq!(t.class, TokClass::Stack);
+                assert_eq!(t.cat[0], item.def + 2, "the action def of a stack item must be visible");
+                assert_eq!(t.sem[0], item.actor_rel + 1, "so must its actor");
+                let rels: Vec<_> = obs.relations.iter().filter(|r| r.from as usize == obs.seg.stack.start + i).map(|r| r.kind).collect();
+                assert!(rels.contains(&rel::STACK_ACTOR));
+                assert_eq!(rels.contains(&rel::ACT_SOURCE), item.source.is_some());
+            }
+            obs.check().unwrap();
+            let n = st.legal_actions().len();
+            st.apply(rng.below(n as u64) as usize);
+        }
+    }
+    assert!(seen_nonempty, "never saw a non-empty stack");
+}
+
+#[test]
+fn non_object_target_ids_cannot_collide_with_template_ids() {
+    // template ids are 1..=MAX_TEMPLATES; every special id must lie above them and fit the model vocabulary
+    let templates_top = omnia_dsl::MAX_TEMPLATES as u16;
+    for id in [CAT_TARGET_PLAYER, CAT_TARGET_PLAYER + omnia_dsl::MAX_PLAYERS as u16 - 1, CAT_TARGET_NUM, CAT_TARGET_HIDDEN] {
+        assert!(id > templates_top, "id {id} overlaps template ids");
+    }
+    assert_eq!(CAT_MAX, CAT_TARGET_HIDDEN);
+    assert!(CAT_TARGET_PLAYER + (omnia_dsl::MAX_PLAYERS as u16) <= CAT_TARGET_NUM, "player target ids overlap the number id");
+}
