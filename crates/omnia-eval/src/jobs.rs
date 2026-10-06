@@ -76,7 +76,7 @@ where
     let mut val: Vec<Sample> = vec![];
     for (k, i) in instances.iter().enumerate() {
         let t = Instant::now();
-        let spec = |games, seed| DataSpec { expert: Expert::Mcts { sims: job.data.sims }, games, epsilon: job.data.epsilon, temp_moves: job.data.temp_moves, max_history: job.data.max_history, seed };
+        let spec = |games, seed| DataSpec { expert: Expert::Mcts { sims: job.data.sims }, games, epsilon: job.data.epsilon, temp_moves: job.data.temp_moves, max_history: job.data.max_history, seed, target_temp: job.data.target_temp };
         let tr = generate_samples(&i.game, i.game_idx, i.family_idx, &spec(job.data.pretrain_games_per_game, 100 + k as u64));
         val.extend(generate_samples(&i.game, i.game_idx, i.family_idx, &spec(job.val_games, 900 + k as u64)));
         println!("[{}] data {} : {} positions ({:.1}s)", job.name, i.id, tr.len(), t.elapsed().as_secs_f32());
@@ -133,7 +133,7 @@ where
         groups: job.groups.clone(),
         target_group: String::new(),
         pretrain_sets: Default::default(),
-        data: DataCfg { sims: 0, pretrain_games_per_game: 0, target_train_games: 0, target_val_games: 0, epsilon: 0.0, temp_moves: 0, max_history: job.cfg.max_history },
+        data: DataCfg { sims: 0, pretrain_games_per_game: 0, target_train_games: 0, target_val_games: 0, epsilon: 0.0, temp_moves: 0, max_history: job.cfg.max_history, target_temp: 1.0 },
         pretrain: PretrainCfg { steps: 0, batch: 0, lr: 0.0, mix: MixSpec::UniformByGame },
         finetune: FinetuneCfg { budgets: vec![], steps: 0, batch: 0, lr: 0.0, eval_every: 0, val_positions: 0 },
         arms: vec![],
@@ -187,12 +187,12 @@ where
 /// Diagnose learnability on one game: target-entropy floor, uniform baseline,
 /// and train/val fit over training. Use before trusting a transfer metric.
 #[allow(clippy::too_many_arguments)]
-pub fn diagnose<B: AutodiffBackend>(game: Arc<omnia_engine::Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64, devices: Vec<B::Device>) -> Result<()>
+pub fn diagnose<B: AutodiffBackend>(game: Arc<omnia_engine::Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64, target_temp: f32, devices: Vec<B::Device>) -> Result<()>
 where
     B::Device: Send + Sync,
 {
     let mcfg = model_cfg(model, &None, 8)?;
-    let spec = |g, seed| DataSpec { expert: Expert::Mcts { sims }, games: g, epsilon: 0.1, temp_moves: 10, max_history: 12, seed };
+    let spec = |g, seed| DataSpec { expert: Expert::Mcts { sims }, games: g, epsilon: 0.1, temp_moves: 10, max_history: 12, seed, target_temp };
     let tr = generate_samples(&game, 0, 0, &spec(games, 11));
     let va = generate_samples(&game, 0, 0, &spec((games / 4).max(4), 99));
     let stat = |s: &[Sample]| -> (f32, f32, f32, f32) {

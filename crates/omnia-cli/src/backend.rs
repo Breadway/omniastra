@@ -86,7 +86,7 @@ pub fn model_benchmark(g: &Arc<Game>, size: &str, batch: usize) -> Result<()> {
     let model = OmniAstra::<AB>::new(&cfg, &dev);
     println!("model {size}: {} params, backend {}", model.num_params(), backend_name());
     let mut tr = Trainer::<AB>::new(model, cfg.clone(), TrainCfg { batch, ..Default::default() }, vec![dev.clone()]);
-    for i in 0..3 {
+    for i in 0..8 {
         let t = Instant::now();
         let s = tr.train_step(&refs);
         println!("train step {i}: {:.0} ms ({:.0} samples/s) loss {:.3}", t.elapsed().as_secs_f64() * 1000.0, batch as f64 / t.elapsed().as_secs_f64(), s.loss);
@@ -97,12 +97,28 @@ pub fn model_benchmark(g: &Arc<Game>, size: &str, batch: usize) -> Result<()> {
     let _ = inner.forward(&b).logits.into_data();
     println!("inference batch of {batch}: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
     let one = HostBatch::build(&refs[..1], BatchOpts { n_reg: cfg.n_reg, mask_ids: false });
-    let t = Instant::now();
-    for _ in 0..20 {
+    // Warm up (kernel compilation / autotuning), then time steady state.
+    let tw = Instant::now();
+    for _ in 0..3 {
         let b = Batch::<Inner>::from_host(&one, &dev);
         let _ = inner.forward(&b).logits.into_data();
     }
-    println!("inference single observation: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0 / 20.0);
+    println!("inference warm-up (3 calls): {:.0} ms", tw.elapsed().as_secs_f64() * 1000.0);
+    let t = Instant::now();
+    for _ in 0..30 {
+        let b = Batch::<Inner>::from_host(&one, &dev);
+        let _ = inner.forward(&b).logits.into_data();
+    }
+    println!("inference single observation (steady state): {:.1} ms", t.elapsed().as_secs_f64() * 1000.0 / 30.0);
+    // Distinct shapes: many different observations, bucketed.
+    let many = probe_samples(g, 64, 32);
+    let t = Instant::now();
+    for s in &many {
+        let h1 = HostBatch::build(&[s], BatchOpts { n_reg: cfg.n_reg, mask_ids: false });
+        let b = Batch::<Inner>::from_host(&h1, &dev);
+        let _ = inner.forward(&b).logits.into_data();
+    }
+    println!("inference over 64 varied observations (includes any per-shape compilation): {:.1} ms each", t.elapsed().as_secs_f64() * 1000.0 / 64.0);
     Ok(())
 }
 
@@ -125,8 +141,8 @@ pub fn run_selfplay(config: &Path, games_dir: &Path, n_devices: usize) -> Result
     omnia_eval::jobs::selfplay_job::<AB>(&job, games_dir, devices(n_devices))
 }
 
-pub fn run_diagnose(game: Arc<Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64) -> Result<()> {
-    omnia_eval::jobs::diagnose::<AB>(game, model, sims, games, steps, batch, lr, devices(1))
+pub fn run_diagnose(game: Arc<Game>, model: &str, sims: u32, games: usize, steps: usize, batch: usize, lr: f64, target_temp: f32) -> Result<()> {
+    omnia_eval::jobs::diagnose::<AB>(game, model, sims, games, steps, batch, lr, target_temp, devices(1))
 }
 
 pub fn run_eval(checkpoint: &Path, model: &str, game: Arc<Game>, game_idx: u32, opponents: &[String], games: u32) -> Result<()> {

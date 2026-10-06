@@ -110,31 +110,40 @@ impl<B: AutodiffBackend> Trainer<B> {
         let opts = self.batch_opts();
         let vw = self.cfg.value_weight;
         let primary = self.devices[0].clone();
-        let results: Vec<(GradientsParams, f32, f32, f32)> = std::thread::scope(|sc| {
-            let handles: Vec<_> = shards
-                .iter()
-                .enumerate()
-                .map(|(i, shard)| {
-                    let dev = self.devices[i % self.devices.len()].clone();
-                    let model = &self.model;
-                    let primary = primary.clone();
-                    sc.spawn(move || {
-                        let host = HostBatch::build(shard, opts);
-                        let replica = if k == 1 { model.clone() } else { model.clone().fork(&dev) };
-                        let bt = Batch::<B>::from_host(&host, &dev);
-                        let out = replica.forward(&bt);
-                        let l = replica.losses_with(&bt, &out, vw, n_total, v_total);
-                        let (t, p, v): (f32, f32, f32) = (l.total.clone().into_scalar().elem::<f32>(), l.policy.into_scalar().elem::<f32>(), l.value.into_scalar().elem::<f32>());
-                        let mut grads = GradientsParams::from_grads(l.total.backward(), &replica);
-                        if k > 1 {
-                            grads = grads.to_device(&primary, &replica);
-                        }
-                        (grads, t, p, v)
+        let run_shard = |shard: &[&Sample], dev: B::Device, model: &OmniAstra<B>, primary: &B::Device| {
+            let host = HostBatch::build(shard, opts);
+            let replica = if k == 1 { model.clone() } else { model.clone().fork(&dev) };
+            let bt = Batch::<B>::from_host(&host, &dev);
+            let out = replica.forward(&bt);
+            let l = replica.losses_with(&bt, &out, vw, n_total, v_total);
+            let (t, p, v): (f32, f32, f32) = (l.total.clone().into_scalar().elem::<f32>(), l.policy.into_scalar().elem::<f32>(), l.value.into_scalar().elem::<f32>());
+            let mut grads = GradientsParams::from_grads(l.total.backward(), &replica);
+            if k > 1 {
+                grads = grads.to_device(primary, &replica);
+            }
+            (grads, t, p, v)
+        };
+        let results: Vec<(GradientsParams, f32, f32, f32)> = if shards.len() == 1 {
+            // One shard: run on the calling thread. Backends such as CUDA keep a
+            // stream and memory pool per thread, so a fresh thread every step leaks
+            // a pool per step.
+            vec![run_shard(shards[0], self.devices[0].clone(), &self.model, &primary)]
+        } else {
+            std::thread::scope(|sc| {
+                let run_shard = &run_shard;
+                let handles: Vec<_> = shards
+                    .iter()
+                    .enumerate()
+                    .map(|(i, shard)| {
+                        let dev = self.devices[i % self.devices.len()].clone();
+                        let model = &self.model;
+                        let primary = &primary;
+                        sc.spawn(move || run_shard(shard, dev, model, primary))
                     })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().expect("shard thread")).collect()
-        });
+                    .collect();
+                handles.into_iter().map(|h| h.join().expect("shard thread")).collect()
+            })
+        };
         let mut acc = GradientsAccumulator::new();
         let (mut t, mut p, mut v) = (0.0, 0.0, 0.0);
         for (g, lt, lp, lv) in results {
