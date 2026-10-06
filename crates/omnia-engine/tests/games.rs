@@ -62,21 +62,30 @@ fn clone_then_diverge_is_independent_and_matches_replay() {
         let g = load(name);
         let mut st = State::new(&g, 7);
         let mut rng = Rng::new(1);
+        let mut rep = Replay::new(&g, 7);
         for _ in 0..6 {
             if st.is_terminal() {
                 break;
             }
             let n = st.legal_actions().len();
-            st.apply(rng.below(n as u64) as usize);
+            let i = rng.below(n as u64) as usize;
+            rep.actions.push(i as u32);
+            st.apply(i);
         }
         if st.is_terminal() {
             continue;
         }
         let h0 = st.state_hash();
+        // replaying the recorded prefix reaches exactly the same state
+        assert_eq!(rep.replay(&g).unwrap().state_hash(), h0, "{name}: replay does not reproduce the played prefix");
         let mut c = st.clone();
         let n = c.legal_actions().len();
         c.apply(0.min(n - 1));
         assert_eq!(st.state_hash(), h0, "{name}: original mutated by clone step");
+        // a clone stepped the same way as a replay of (prefix + that action) agrees
+        let mut rep2 = rep.clone();
+        rep2.actions.push(0.min(n - 1) as u32);
+        assert_eq!(rep2.replay(&g).unwrap().state_hash(), c.state_hash(), "{name}: clone diverged from replay");
         // every action leads to a state without panicking
         for i in 0..st.legal_actions().len() {
             let mut c = st.clone();

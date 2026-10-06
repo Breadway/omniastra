@@ -25,6 +25,12 @@ fn families_generate_valid_games_with_measured_stats() {
                     Err(e) => println!("  reject {:?} {:?} {seed}: {e}", fam, variant),
                 }
             }
+            // most seeds must produce a game that passes measurement, and accepted games must be sane
+            assert!(ok * 12 >= tot * 5, "{:?}/{:?}: only {ok}/{tot} generated games were accepted", fam, variant);
+            let sane = sample.as_ref().expect("at least one accepted game");
+            assert!(sane.avg_decisions >= cfg.min_decisions, "{:?}/{:?}: accepted games too short", fam, variant);
+            assert_eq!(sane.fault_rate, 0.0, "{:?}/{:?}: accepted game has engine faults", fam, variant);
+            assert!(sane.p0_win_rate + sane.p1_win_rate + sane.draw_rate > 0.99, "{:?}/{:?}: outcome rates do not add up", fam, variant);
             let s = sample.map(|s| format!("dec {:.0} br {:.1} p0 {:.2} p1 {:.2} to {:.2} h {:.2} m {:.2}", s.avg_decisions, s.avg_branching, s.p0_win_rate, s.p1_win_rate, s.timeout_rate, s.heuristic_vs_random.unwrap_or(-1.0), s.mcts_vs_random.unwrap_or(-1.0))).unwrap_or_default();
             println!("{:?}/{:?}: accepted {ok}/{tot}  {s}", fam, variant);
         }

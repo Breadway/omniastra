@@ -29,7 +29,11 @@ fn heuristic_and_mcts_beat_random() {
         let h = winrate(name, &|d| Box::new(HeuristicAgent::new(d)), 60);
         let m = winrate(name, &|d| Box::new(MctsAgent::rollout(d, 60)), 24);
         println!("{name}: heuristic vs random {h:.2}, mcts60 vs random {m:.2}");
-        assert!(h > 0.5 || m > 0.5, "{name}: neither generic agent beats random");
+        // each agent is checked on its own (seeds are fixed, so this is deterministic)
+        assert!(m > 0.65, "{name}: mcts60 should clearly beat random, got {m:.2}");
+        // the 1-ply heuristic is weak in skirmish (about even with random), solid elsewhere
+        let floor = if name == "skirmish" { 0.4 } else { 0.6 };
+        assert!(h > floor, "{name}: heuristic should score above {floor} vs random, got {h:.2}");
     }
 }
 
