@@ -98,7 +98,10 @@ stack.
 * **Effects** (bounded IR): `Seq If ForEach ForEachPlayer Repeat Move Create Copy Destroy
   Transform SetController SetAttr ModAttr SetRes ModRes SetVar ModVar Shuffle Reveal Hide Attach
   Detach Hook Emit Delay CancelStack Win Lose DrawGame EndPhase EndTurn`. Expressions/conditions
-  are typed and side-effect free except `Rand`, which uses the explicit RNG.
+  are typed and side-effect free except `Rand`, which uses the explicit RNG. `Repeat` runs at
+  most 64 iterations (`MAX_REPEAT`); every iteration and every per-object effect also spends a
+  step of the `max_steps` budget. `Transform`, `SetController`, `Hide`, `Detach` and variable
+  effects are silent (no event, so no trigger can react and they are not in the history).
 * **Events** are first-class (`Event` with actor, source, targets, slot, before/after, zones,
   causal parent, per-observer visibility masks). Triggers/modifiers subscribe to them; the model
   sees the (redacted) history.

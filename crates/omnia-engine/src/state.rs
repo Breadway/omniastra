@@ -196,7 +196,9 @@ impl State {
         &self.zones[inst]
     }
 
-    /// Hash over the full true state (determinism / replay tests).
+    /// Hash over the full true state: objects, zones, resources, variables,
+    /// clock, the stack, pending delayed effects, win/lose flags, the outcome,
+    /// history length and RNG (determinism / replay tests).
     pub fn state_hash(&self) -> u64 {
         let mut h = blake3::Hasher::new();
         for o in &self.objs {
@@ -225,6 +227,31 @@ impl State {
         h.update(&self.turn.to_le_bytes());
         h.update(&[self.phase, self.active, self.priority, self.passes]);
         h.update(&(self.stack.len() as u32).to_le_bytes());
+        for s in &self.stack {
+            h.update(&s.def.to_le_bytes());
+            h.update(&[s.actor, s.cancelled as u8]);
+            h.update(&s.source.to_le_bytes());
+            h.update(format!("{:?}", s.targets).as_bytes());
+            h.update(&s.cause_seq.to_le_bytes());
+        }
+        h.update(&(self.delayed.len() as u32).to_le_bytes());
+        for d in &self.delayed {
+            h.update(&d.fire_turn.to_le_bytes());
+            h.update(&[d.at as u8, d.owner]);
+            h.update(&d.source.to_le_bytes());
+            h.update(&serde_json::to_vec(&d.effect).unwrap());
+        }
+        h.update(&[self.win_mask, self.lose_mask, self.draw_flag as u8]);
+        match &self.outcome {
+            None => h.update(&[0]),
+            Some(o) => {
+                h.update(&[1]);
+                for p in &o.payoffs {
+                    h.update(&p.to_le_bytes());
+                }
+                h.update(format!("{:?}", o.reason).as_bytes())
+            }
+        };
         h.update(&(self.hist.len() as u32).to_le_bytes());
         h.update(&serde_json::to_vec(&self.rng).unwrap());
         u64::from_le_bytes(h.finalize().as_bytes()[..8].try_into().unwrap())
@@ -352,5 +379,45 @@ impl State {
         }
         self.steps -= 1;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gambit_state() -> State {
+        let src = include_str!("../../../games/gambit.ron");
+        let g = Game::new(GameDef::from_ron(src).unwrap()).unwrap();
+        State::new(&g, 1)
+    }
+
+    #[test]
+    fn state_hash_covers_stack_delayed_effects_and_outcome() {
+        let base = gambit_state();
+        let h0 = base.state_hash();
+        assert_eq!(h0, base.clone().state_hash());
+
+        let mut s = base.clone();
+        s.stack.push(StackItem { def: 0, actor: 0, source: NONE_OBJ, targets: Targets::new(), cancelled: false, cause_seq: NO_SEQ });
+        let h_stack = s.state_hash();
+        assert_ne!(h_stack, h0, "stack contents");
+        s.stack[0].cancelled = true;
+        assert_ne!(s.state_hash(), h_stack, "cancelled flag");
+
+        let mut s = base.clone();
+        s.delayed.push(Delayed { fire_turn: 3, at: Moment::TurnStart, owner: 0, source: NONE_OBJ, effect: Effect::EndTurn });
+        let h_delay = s.state_hash();
+        assert_ne!(h_delay, h0, "delayed effects");
+        s.delayed[0].effect = Effect::EndPhase;
+        assert_ne!(s.state_hash(), h_delay, "delayed effect body");
+
+        let mut s = base.clone();
+        s.outcome = Some(Outcome { payoffs: [1.0, -1.0, 0.0, 0.0], reason: EndReason::Rules });
+        assert_ne!(s.state_hash(), h0, "outcome");
+
+        let mut s = base.clone();
+        s.win_mask = 1;
+        assert_ne!(s.state_hash(), h0, "win flags");
     }
 }

@@ -360,3 +360,17 @@ fn simultaneous_wins_are_a_draw_not_two_winners() {
     assert_eq!(&pay[..2], &[0.0, 0.0], "both players won at once");
     assert_eq!(pay[0] + pay[1], 0.0, "two-player payoffs must be zero-sum");
 }
+
+#[test]
+fn transform_spends_steps_so_it_cannot_dodge_the_budget() {
+    use omnia_dsl::{Cond, Effect, SelOrder, Sel, ZRef, ZWho};
+    let mut def = load_def("gambit");
+    def.limits.max_steps = 20;
+    // the whole deck (23 cards) is transformed in one effect
+    def.actions[2].effect = Effect::Transform(Sel::Zones { zones: vec![ZRef { who: ZWho::Me, zone: 0 }], filter: Cond::True, order: SelOrder::All }, 0);
+    let g = Game::new(def).unwrap();
+    let mut st = State::new(&g, 1);
+    let end = st.legal_actions().iter().position(|a| a.def == 2).unwrap();
+    st.apply(end);
+    assert_eq!(st.fault(), Some(Fault::StepLimit));
+}

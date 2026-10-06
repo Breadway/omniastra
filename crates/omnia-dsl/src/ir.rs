@@ -5,11 +5,21 @@
 //! here (or anywhere in the generic runtime) knows about a specific game.
 //!
 //! The effect language is deliberately *not* Turing-complete: loops are
-//! bounded (`ForEach` ranges over finite selections, `Repeat` is capped by
-//! [`Limits`]), there are no user-defined functions or recursion, and every
-//! resolution runs under a step budget.
+//! bounded (`ForEach` ranges over finite selections, `Repeat` runs at most
+//! [`MAX_REPEAT`] iterations), there are no user-defined functions or
+//! recursion, and every resolution runs under the [`Limits::max_steps`]
+//! budget (each loop iteration and each per-object effect spends one step).
+//!
+//! Not every effect is observable: `Transform`, `SetController`, `Hide`,
+//! `Detach`, `SetVar` and `ModVar` change the state but emit no event, so
+//! triggers cannot react to them and they do not appear in the history.
+//! Resource, attribute and zone changes, reveals, attachments, shuffles,
+//! creation and destruction do emit events.
 
 use serde::{Deserialize, Serialize};
+
+/// Most iterations a single `Repeat` effect performs.
+pub const MAX_REPEAT: i32 = 64;
 
 pub type ResId = u8;
 pub type AttrId = u8;

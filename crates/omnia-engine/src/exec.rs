@@ -404,7 +404,7 @@ impl State {
                 }
             }
             Effect::Repeat(n, body) => {
-                let n = self.eval(n, c).clamp(0, 64);
+                let n = self.eval(n, c).clamp(0, MAX_REPEAT);
                 for _ in 0..n {
                     self.tick()?;
                     self.exec(body, c)?;
@@ -457,6 +457,7 @@ impl State {
             Effect::Transform(sel, t) => {
                 let g = self.game.clone();
                 for o in self.select(sel, c) {
+                    self.tick()?;
                     let mut attrs = [0; MAX_ATTRS];
                     for (i, a) in g.def.attrs.iter().enumerate() {
                         attrs[i] = a.default;
@@ -472,6 +473,7 @@ impl State {
             Effect::SetController(sel, p) => {
                 let p = self.pref(*p, c);
                 for o in self.select(sel, c) {
+                    self.tick()?;
                     self.objs[o as usize].controller = p;
                 }
             }
@@ -524,6 +526,7 @@ impl State {
                     PSel::Others => all & !(1 << c.me),
                 };
                 for o in self.select(sel, c) {
+                    self.tick()?;
                     self.objs[o as usize].reveal |= mask;
                     let m = self.obj_mask(o);
                     self.emit(EventKind::Revealed, c.me, o, [NONE_OBJ; 2], 0, 0, 0, NO_ZONE, NO_ZONE, m, all);
@@ -531,6 +534,7 @@ impl State {
             }
             Effect::Hide(sel) => {
                 for o in self.select(sel, c) {
+                    self.tick()?;
                     self.objs[o as usize].reveal = 0;
                 }
             }
@@ -538,6 +542,7 @@ impl State {
                 let p = self.oref(*parent, c);
                 if p != NONE_OBJ {
                     for o in self.select(sel, c) {
+                        self.tick()?;
                         if o != p {
                             self.objs[o as usize].parent = p;
                             let m = self.obj_mask(o) | self.obj_mask(p);
@@ -549,6 +554,7 @@ impl State {
             }
             Effect::Detach(sel) => {
                 for o in self.select(sel, c) {
+                    self.tick()?;
                     self.objs[o as usize].parent = NONE_OBJ;
                 }
             }
