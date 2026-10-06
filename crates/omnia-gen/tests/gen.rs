@@ -101,3 +101,34 @@ fn inverted_burn_is_cheap_when_strong() {
     assert!(seen > 5, "no inverted burn spells were generated");
     assert_eq!(dmg_plus_cost.len(), 1, "damage + cost must be constant in the inverted variant: {dmg_plus_cost:?}");
 }
+
+#[test]
+#[should_panic(expected = "has no variant")]
+fn generate_refuses_unsupported_variants() {
+    let spec = GenSpec { family: Family::Tug, seed: 1, variant: Variant::AltVictory, relabel: false, random_reward: false };
+    let _ = generate(&spec);
+}
+
+#[test]
+fn tug_is_seat_symmetric_and_zero_sum() {
+    use omnia_engine::*;
+    for seed in 0..10u64 {
+        let spec = GenSpec { family: Family::Tug, seed, variant: Variant::Normal, relabel: false, random_reward: false };
+        let def = generate(&spec);
+        assert!(def.vars.is_empty(), "no absolute-seat track variable");
+        let lead = def.resources.iter().position(|r| r.name == "lead").unwrap();
+        let g = Game::new(def).unwrap();
+        for play in 0..20u64 {
+            let mut st = State::new(&g, play);
+            let mut rng = Rng::new(play + 7 * seed);
+            while !st.is_terminal() {
+                // the two leads always cancel, so pushing means the same thing for either seat
+                assert_eq!(st.resource(0, lead) + st.resource(1, lead), 0, "seed {seed} play {play}");
+                let n = st.legal_actions().len();
+                st.apply(rng.below(n as u64) as usize);
+            }
+            let pay = st.payoffs().unwrap();
+            assert_eq!(pay[0] + pay[1], 0.0);
+        }
+    }
+}

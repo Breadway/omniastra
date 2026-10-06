@@ -104,6 +104,7 @@ impl GenSpec {
 }
 
 pub fn generate(spec: &GenSpec) -> GameDef {
+    assert!(spec.family.supports(spec.variant), "family {} has no variant {:?}; check Family::supports first", spec.family.name(), spec.variant);
     let salt = match spec.family {
         Family::Tempo => 0x11,
         Family::Engine => 0x22,
