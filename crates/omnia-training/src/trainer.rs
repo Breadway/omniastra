@@ -101,7 +101,10 @@ impl<B: AutodiffBackend> Trainer<B> {
 
     /// Gradients of the global mean loss over `samples`, computed over `k`
     /// shards (k = number of devices). Returns (grads, loss, policy, value).
+    /// The mean over an empty batch is undefined, so `samples` must not be empty
+    /// ([`train_step`](Self::train_step) skips empty batches).
     pub fn grads(&self, samples: &[&Sample], k: usize) -> (GradientsParams, f32, f32, f32) {
+        assert!(!samples.is_empty(), "Trainer::grads needs at least one sample");
         let k = k.max(1).min(samples.len());
         let n_total = samples.len() as f64;
         let v_total: f64 = samples.iter().map(|s| s.obs.num_players as f64).sum();
@@ -155,9 +158,14 @@ impl<B: AutodiffBackend> Trainer<B> {
         (acc.grads(), t, p, v)
     }
 
+    /// One optimizer update. An empty batch carries no signal: nothing is
+    /// updated or counted and zero losses are reported.
     pub fn train_step(&mut self, samples: &[&Sample]) -> StepStats {
         let t0 = Instant::now();
         let lr = self.cfg.lr_at(self.step_idx);
+        if samples.is_empty() {
+            return StepStats { loss: 0.0, policy: 0.0, value: 0.0, lr };
+        }
         let k = self.devices.len();
         let (grads, loss, policy, value) = self.grads(samples, k);
         // Module clones are shallow (shared tensors); the optimizer consumes one handle.

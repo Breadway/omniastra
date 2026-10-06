@@ -388,3 +388,17 @@ fn relabel_permutes_class_labels_within_the_documented_range() {
         assert!(rl.class[CLASS_LABELS..].iter().enumerate().all(|(i, c)| *c as usize == CLASS_LABELS + i), "labels above stay in place");
     }
 }
+
+#[test]
+fn replay_rejects_out_of_range_actions() {
+    let g = load("skirmish");
+    let (mut rep, _) = playout(&g, 3);
+    assert!(rep.replay(&g).is_ok());
+    rep.actions[2] = 10_000; // far beyond any legal-action list
+    let err = rep.replay(&g).err().expect("must be rejected");
+    assert!(err.contains("invalid action"), "{err}");
+    // extra actions after the game is over are rejected too
+    let (mut rep, _) = playout(&g, 3);
+    rep.actions.push(0);
+    assert!(rep.replay(&g).is_err());
+}

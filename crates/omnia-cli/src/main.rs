@@ -278,6 +278,9 @@ fn main() -> Result<()> {
                 return Err(anyhow!("game hash mismatch (replay {:016x}, game {:016x})", rep.game_hash, g.hash64));
             }
             for (i, a) in rep.actions.iter().enumerate() {
+                if st.is_terminal() || (*a as usize) >= st.legal_actions().len() {
+                    return Err(anyhow!("replay step {i}: action index {a} is not valid here ({} legal actions{}); the replay does not match this game build", st.legal_actions().len(), if st.is_terminal() { ", game already over" } else { "" }));
+                }
                 let act = st.legal_actions()[*a as usize].clone();
                 println!("{:>3}. T{} P{}: {}", i, st.turn(), act.actor, describe::action(&st, &act));
                 st.apply(*a as usize);

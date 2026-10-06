@@ -258,3 +258,14 @@ fn run_log_surfaces_open_failures_and_writes_lines() {
     std::fs::write(&blocker, "x").unwrap();
     assert!(RunLog::create(&blocker.join("log.jsonl")).is_err());
 }
+
+#[test]
+fn empty_batch_is_a_no_op_not_a_panic() {
+    let dev: <AB as burn::tensor::backend::BackendTypes>::Device = Default::default();
+    let m = OmniAstra::<AB>::new(&nano(), &dev);
+    let mut t = Trainer::<AB>::new(m, nano(), TrainCfg::default(), vec![dev]);
+    let stats = t.train_step(&[]);
+    assert_eq!(stats.loss, 0.0);
+    assert_eq!(t.counters.optimizer_updates, 0);
+    assert_eq!(t.counters.positions, 0);
+}
