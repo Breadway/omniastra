@@ -21,4 +21,4 @@ cargo run --release -p omnia-cli -- benchmark --model nano
 cargo run --release -p omnia-cli -- transfer experiments/smoke.json
 ```
 
-This project is independent of the film/`astra/` code elsewhere in this repository.
+This project is independent of the Astra film project.
