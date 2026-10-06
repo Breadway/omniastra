@@ -64,11 +64,14 @@ pub fn resume<B: AutodiffBackend>(dir: &Path, cfg: &ModelConfig, tcfg: TrainCfg,
     Ok(t)
 }
 
-/// Copy the shared backbone (registers, relational blocks, decoder, value/policy
-/// heads optionally) from `src` into `dst`, leaving `dst`'s input adapter
+/// Copy the shared backbone (registers, relational/temporal bias tables,
+/// relational blocks, decoder, value/policy heads optionally) from `src` into `dst`, leaving `dst`'s input adapter
 /// (id/slot embeddings, game embedding) as it was.
 pub fn transplant_backbone<B: Backend>(src: &OmniAstra<B>, mut dst: OmniAstra<B>, include_heads: bool) -> OmniAstra<B> {
     dst.reg = src.reg.clone();
+    dst.rel_tab = src.rel_tab.clone();
+    dst.tb_tab = src.tb_tab.clone();
+    dst.rel_as_tab = src.rel_as_tab.clone();
     dst.blocks = src.blocks.clone();
     dst.final_norm = src.final_norm.clone();
     dst.link_proj = src.link_proj.clone();
