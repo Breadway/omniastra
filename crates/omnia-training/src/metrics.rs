@@ -108,18 +108,25 @@ pub struct RunLog {
 }
 
 impl RunLog {
-    pub fn create(path: &std::path::Path) -> RunLog {
+    /// Open (append) the log. Failing to open is an error: runs are supposed to
+    /// be logged, so silently running without a log would lose data.
+    pub fn create(path: &std::path::Path) -> std::io::Result<RunLog> {
+        let ctx = |e: std::io::Error| std::io::Error::new(e.kind(), format!("run log {}: {e}", path.display()));
         if let Some(p) = path.parent() {
-            std::fs::create_dir_all(p).ok();
+            std::fs::create_dir_all(p).map_err(ctx)?;
         }
-        RunLog { file: std::fs::OpenOptions::new().create(true).append(true).open(path).ok() }
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(ctx)?;
+        Ok(RunLog { file: Some(file) })
     }
+    /// A log that discards everything (explicitly opted out, e.g. in tests).
     pub fn none() -> RunLog {
         RunLog { file: None }
     }
-    pub fn write<T: Serialize>(&mut self, v: &T) {
+    pub fn write<T: Serialize>(&mut self, v: &T) -> std::io::Result<()> {
         if let Some(f) = self.file.as_mut() {
-            let _ = writeln!(f, "{}", serde_json::to_string(v).unwrap());
+            let line = serde_json::to_string(v).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            writeln!(f, "{line}")?;
         }
+        Ok(())
     }
 }

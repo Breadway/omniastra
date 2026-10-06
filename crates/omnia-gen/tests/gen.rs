@@ -56,3 +56,28 @@ fn countered_spells_do_not_strand_cards_in_generated_stack_games() {
     }
     assert!(cancels > 0, "no generated stack game ever cancelled a spell");
 }
+
+#[test]
+fn variant_names_are_parsed_strictly() {
+    assert_eq!(Variant::parse("normal"), Some(Variant::Normal));
+    assert_eq!(Variant::parse("alt_victory"), Some(Variant::AltVictory));
+    assert_eq!(Variant::parse("altvictory"), Some(Variant::AltVictory));
+    assert_eq!(Variant::parse("inverted"), Some(Variant::Inverted));
+    // a typo must not silently become "normal"
+    assert_eq!(Variant::parse("invertd"), None);
+    assert_eq!(Variant::parse(""), None);
+}
+
+#[test]
+fn generate_set_reports_io_errors_and_unsupported_variants() {
+    let dir = std::env::temp_dir().join(format!("omnia-gen-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // an output "directory" that is really a file cannot be created
+    let blocker = dir.join("file");
+    std::fs::write(&blocker, "x").unwrap();
+    let r = generate_set(&blocker.join("sub"), Family::Tempo, Variant::Normal, true, false, 1, 1, &ValidationConfig::default());
+    assert!(r.is_err(), "I/O failure must be an error, not a panic or a silent success");
+    let r = generate_set(&dir.join("out"), Family::Tug, Variant::AltVictory, true, false, 1, 1, &ValidationConfig::default());
+    assert!(r.is_err(), "unsupported variant must be rejected");
+    std::fs::remove_dir_all(&dir).ok();
+}

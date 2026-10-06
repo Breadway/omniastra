@@ -242,3 +242,19 @@ fn model_moved_from_inference_to_autodiff_trains_after_enable_grad() {
         assert_eq!(changed, expect_change, "enable_grad={enable}");
     }
 }
+
+#[test]
+fn run_log_surfaces_open_failures_and_writes_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    // writes land in the file
+    let path = dir.path().join("sub/log.jsonl");
+    let mut log = RunLog::create(&path).unwrap();
+    log.write(&serde_json::json!({"a": 1})).unwrap();
+    log.write(&serde_json::json!({"a": 2})).unwrap();
+    drop(log);
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    // an unopenable path is an error, not a silent no-op log
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "x").unwrap();
+    assert!(RunLog::create(&blocker.join("log.jsonl")).is_err());
+}

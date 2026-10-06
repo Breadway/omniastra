@@ -210,13 +210,6 @@ fn model_config(c: &TransferConfig, n_games: usize) -> Result<ModelConfig> {
     }
 }
 
-fn variant_of(s: &str) -> Variant {
-    match s {
-        "alt_victory" | "altvictory" => Variant::AltVictory,
-        "inverted" => Variant::Inverted,
-        _ => Variant::Normal,
-    }
-}
 
 /// Resolve groups into concrete validated game instances.
 pub fn build_instances(c: &TransferConfig, games_dir: &Path) -> Result<Vec<Instance>> {
@@ -239,7 +232,7 @@ pub fn build_instances(c: &TransferConfig, games_dir: &Path) -> Result<Vec<Insta
             defs.push(GameDef::from_ron(&src)?);
         } else {
             let fam = Family::parse(&g.family).ok_or_else(|| anyhow!("unknown family {}", g.family))?;
-            let v = variant_of(&g.variant);
+            let v = Variant::parse(&g.variant).ok_or_else(|| anyhow!("group {}: unknown variant '{}' (normal | alt_victory | inverted)", g.id, g.variant))?;
             if !fam.supports(v) {
                 return Err(anyhow!("family {} has no variant {}", g.family, g.variant));
             }
@@ -286,7 +279,7 @@ where
     let out_dir = PathBuf::from(&cfgv.out_dir);
     std::fs::create_dir_all(&out_dir)?;
     std::fs::write(out_dir.join("config.json"), serde_json::to_string_pretty(cfgv)?)?;
-    let mut log = RunLog::create(&out_dir.join("results.jsonl"));
+    let mut log = RunLog::create(&out_dir.join("results.jsonl"))?;
     let t_start = Instant::now();
 
     let instances = build_instances(cfgv, games_dir)?;
@@ -348,7 +341,7 @@ where
                     println!("[{}] pretrain {set} seed {seed} step {step}/{} loss {:.3} (pol {:.3} val {:.3}) lr {:.2e} {:.0}s", cfgv.name, tcfg.steps, st.loss, st.policy, st.value, st.lr, t.elapsed().as_secs_f32());
                 }
             }
-            save_weights(&out_dir.join(format!("pretrain/{set}-seed{seed}")), &tr.valid(), &mcfg, serde_json::json!({"set": set, "seed": seed, "groups": groups, "counters": tr.counters}))?;
+            save_weights(&out_dir.join(format!("pretrain/{set}-seed{seed}")), &tr.valid(), &mcfg, serde_json::json!({"set": set, "seed": seed, "groups": groups, "counters": tr.counters, "max_history": cfgv.data.max_history}))?;
             pretrained.insert(set, (tr.valid(), tr.counters.clone()));
         }
 
@@ -457,7 +450,7 @@ where
                         "[{}] seed {seed} target {} arm {:<24} N={:<6} val CE {:.3} top1 {:.3} strength {:.3} ({:.0}s)",
                         cfgv.name, target.id, arm.name, n, row.val_ce, row.val_top1, row.mean_strength_score, t_run.elapsed().as_secs_f32()
                     );
-                    log.write(&row);
+                    log.write(&row)?;
                     rows.push(row);
                 }
             }

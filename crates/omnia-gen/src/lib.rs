@@ -34,6 +34,18 @@ pub enum Variant {
     Inverted,
 }
 
+impl Variant {
+    /// Strict parse of a variant name; unknown names are not silently `Normal`.
+    pub fn parse(s: &str) -> Option<Variant> {
+        match s {
+            "normal" => Some(Variant::Normal),
+            "alt_victory" | "altvictory" => Some(Variant::AltVictory),
+            "inverted" => Some(Variant::Inverted),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Family {
     Tempo,
@@ -309,24 +321,51 @@ pub struct GameSet {
     pub games: Vec<GameEntry>,
 }
 
+/// A requested game that could not be generated (it failed validation).
+#[derive(Clone, Debug)]
+pub struct DroppedGame {
+    pub seed: u64,
+    pub reason: String,
+}
+
+/// Result of [`generate_set`]: written games plus the ones that were dropped.
+#[derive(Clone, Debug, Default)]
+pub struct GenerateOutcome {
+    pub entries: Vec<GameEntry>,
+    pub dropped: Vec<DroppedGame>,
+}
+
 /// Generate `count` valid games of a family into `dir` (RON files) and return
-/// manifest entries. Deterministic given `base_seed`.
-pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, relabel: bool, random_reward_flag: bool, base_seed: u64, count: usize, cfg: &ValidationConfig) -> Vec<GameEntry> {
-    std::fs::create_dir_all(dir).expect("create dir");
+/// manifest entries plus the games that failed validation. Deterministic given
+/// `base_seed`. I/O failures are errors.
+pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, relabel: bool, random_reward_flag: bool, base_seed: u64, count: usize, cfg: &ValidationConfig) -> Result<GenerateOutcome, String> {
+    if !family.supports(variant) {
+        return Err(format!("family {} has no variant {:?}", family.name(), variant));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let results: Vec<_> = (0..count)
         .into_par_iter()
-        .filter_map(|i| {
+        .map(|i| {
             let spec = GenSpec { family, seed: base_seed + i as u64 * 7919, variant, relabel, random_reward: false };
             // Validate the honest game first; the random-reward control is derived from it.
-            let (s, def, stats, tries) = generate_valid(&spec, cfg, 40).ok()?;
-            let def = if random_reward_flag { random_reward(&def) } else { def };
-            Some((s, def, stats, tries))
+            generate_valid(&spec, cfg, 40).map(|(s, def, stats, tries)| {
+                let def = if random_reward_flag { random_reward(&def) } else { def };
+                (s, def, stats, tries)
+            }).map_err(|reason| DroppedGame { seed: spec.seed, reason: reason.to_string() })
         })
         .collect();
     let mut entries = vec![];
-    for (s, def, stats, tries) in results {
+    let mut dropped = vec![];
+    for r in results {
+        let (s, def, stats, tries) = match r {
+            Ok(x) => x,
+            Err(d) => {
+                dropped.push(d);
+                continue;
+            }
+        };
         let path = dir.join(format!("{}.ron", def.name));
-        std::fs::write(&path, def.to_ron()).expect("write game");
+        std::fs::write(&path, def.to_ron()).map_err(|e| format!("{}: {e}", path.display()))?;
         entries.push(GameEntry {
             id: def.name.clone(),
             family: family.name().into(),
@@ -342,7 +381,7 @@ pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, rel
         });
     }
     entries.sort_by(|a, b| a.id.cmp(&b.id));
-    entries
+    Ok(GenerateOutcome { entries, dropped })
 }
 
 pub fn load_game(path: &std::path::Path) -> Result<Arc<Game>, String> {
