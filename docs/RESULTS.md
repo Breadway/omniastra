@@ -56,3 +56,21 @@ the sanity floor, other-family must beat both scratch and the random-reward cont
 
 Cross-machine reproducibility check: the `smoke.json` experiment produced identical validation
 cross-entropy/top-1 values on the container and on the laptop.
+
+## 5. Known defects that affect earlier runs
+
+A code review (tracked as OMNI-1 to OMNI-24) found defects that were fixed after the runs above.
+Anything produced before those fixes should be treated as unreliable for transfer conclusions:
+
+* **Relabelled games lost their death trigger** (OMNI-1): `Relabel` did not remap `EventSlot`
+  constants, so generated tempo games (relabelling is on by default) kept creatures at 0 health
+  on the board. Data and games generated before the fix are mechanically different from the
+  canonical game.
+* **Summary rows mixed budgets** (OMNI-2): a larger budget row averaged in the smaller runs, which
+  distorted the scratch curve and the data multiplier.
+* **Backbone arms were not the backbone** (OMNI-3): the relation/time bias tables were neither
+  transplanted nor frozen.
+* **Reported CE was selection-biased** (OMNI-4): minimum over checkpoints, including step 0, on the
+  same set used to choose the checkpoint.
+
+`pilot_v2_tempo` should be rerun with the fixed code before its numbers are recorded here.
