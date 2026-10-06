@@ -120,7 +120,8 @@ impl State {
         for e in &g.def.shared_setup {
             for _ in 0..e.count {
                 let inst = g.zone_base[e.zone as usize];
-                st.spawn(e.template, 0, inst, false);
+                // Unowned until it moves into a player's zone.
+                st.spawn(e.template, NO_PLAYER, inst, false);
             }
         }
         let ctx = Ctx::new(0);
@@ -277,7 +278,16 @@ impl State {
         for (a, v) in &t.attrs {
             attrs[*a as usize] = *v;
         }
-        let controller = if g.inst[inst as usize].1 != NO_PLAYER { g.inst[inst as usize].1 } else { owner };
+        // Shared-zone objects of no player are internally run as seat 0 (so
+        // triggers always have a valid acting player); views report them as
+        // controlled by nobody.
+        let controller = if g.inst[inst as usize].1 != NO_PLAYER {
+            g.inst[inst as usize].1
+        } else if owner != NO_PLAYER {
+            owner
+        } else {
+            0
+        };
         let id = self.objs.len() as ObjId;
         self.objs.push(Obj { template, owner, controller, zone: inst, attrs, parent: NONE_OBJ, reveal: 0, alive: true });
         self.zones[inst as usize].push(id);

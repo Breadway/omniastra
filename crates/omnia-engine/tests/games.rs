@@ -1,4 +1,4 @@
-use omnia_dsl::GameDef;
+use omnia_dsl::{GameDef, SetupEntry, Visibility};
 use omnia_engine::*;
 use std::sync::Arc;
 
@@ -197,4 +197,100 @@ fn relabel_remaps_event_slot_constants() {
         let Cond::Cmp(lhs, CmpOp::Le, _) = &parts[1] else { panic!("unexpected health test") };
         assert!(matches!(**lhs, Expr::Attr(_, id) if id == rl.attr[2]), "seed {seed}");
     }
+}
+
+fn load_def(name: &str) -> GameDef {
+    let path = format!("{}/../../games/{}.ron", env!("CARGO_MANIFEST_DIR"), name);
+    GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn shared_objects_are_unowned_until_claimed() {
+    use omnia_engine::view::NO_REL;
+    let g = load("merchant");
+    let (mut saw_unowned, mut saw_claimed) = (false, false);
+    for seed in 0..30 {
+        let mut st = State::new(&g, seed);
+        let mut rng = Rng::new(seed + 7);
+        while !st.is_terminal() {
+            let p = st.decision_maker().unwrap();
+            let v = st.view(p);
+            for o in &v.objects {
+                let zone = &v.zones[o.zone as usize];
+                if zone.owner_rel == NO_REL {
+                    // still in a shared zone: nobody owns or controls it (unless it came from a player)
+                    saw_unowned |= o.owner_rel == NO_REL && o.controller_rel == NO_REL;
+                } else {
+                    // a player's zone: the object is owned by someone
+                    assert_ne!(o.owner_rel, NO_REL, "seed {seed}: object in a player zone has no owner");
+                    saw_claimed = true;
+                }
+            }
+            let n = st.legal_actions().len();
+            st.apply(rng.below(n as u64) as usize);
+        }
+    }
+    assert!(saw_unowned && saw_claimed);
+}
+
+#[test]
+fn market_view_is_symmetric_between_seats() {
+    use omnia_engine::view::NO_REL;
+    let g = load("merchant");
+    let mut st = State::new(&g, 3);
+    for p in 0..2 {
+        let v = st.view(p);
+        let market = v.zones.iter().position(|z| z.def == 0).unwrap();
+        assert_eq!(v.zones[market].owner_rel, NO_REL);
+        let in_market: Vec<_> = v.objects.iter().filter(|o| o.zone as usize == market).collect();
+        assert!(!in_market.is_empty());
+        assert!(in_market.iter().all(|o| o.owner_rel == NO_REL && o.controller_rel == NO_REL), "seat {p} sees the market owned");
+    }
+}
+
+#[test]
+fn determinize_does_not_mix_shared_hidden_cards_with_hands() {
+    // gambit with a hidden shared zone holding only `counter` (template 4)
+    let mut def = load_def("gambit");
+    def.zones[3].vis = Visibility::Hidden;
+    def.shared_setup.push(SetupEntry { zone: 3, template: 4, count: 3 });
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 1);
+    let shared = g.zone_base[3] as usize;
+    assert_eq!(st.zone_contents(shared).len(), 3);
+    let mut rng = Rng::new(5);
+    for _ in 0..40 {
+        let d = st.determinize(0, &mut rng);
+        for o in d.zone_contents(shared) {
+            assert_eq!(d.object(*o).template, 4, "a shared hidden card took a player's identity");
+        }
+    }
+}
+
+#[test]
+fn determinize_respects_zone_constraints_without_falling_back_to_truth() {
+    // Opponent hands may only hold kind-0 cards, decks hold both kinds. Naive
+    // shuffles almost never satisfy that, so a fallback would keep the truth.
+    let mut def = load_def("gambit");
+    def.zones[1].allowed_kinds = Some(vec![0]);
+    // make kind-1 cards plentiful so a random shuffle rarely satisfies the hand constraint
+    def.player_setup[4].count = 40;
+    def.player_setup.push(SetupEntry { zone: 1, template: 0, count: 6 });
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 2);
+    let (opp_hand, opp_deck) = (g.zone_base[1] as usize + 1, g.zone_base[0] as usize + 1);
+    let truth = |s: &State, z: usize| -> Vec<u16> { s.zone_contents(z).iter().map(|o| s.object(*o).template).collect() };
+    let mut rng = Rng::new(11);
+    let mut changed = 0;
+    for _ in 0..20 {
+        let d = st.determinize(0, &mut rng);
+        for o in d.zone_contents(opp_hand) {
+            let t = d.object(*o).template as usize;
+            assert_eq!(g.def.templates[t].kind, 0, "constraint violated");
+        }
+        if truth(&d, opp_hand) != truth(&st, opp_hand) || truth(&d, opp_deck) != truth(&st, opp_deck) {
+            changed += 1;
+        }
+    }
+    assert!(changed >= 10, "determinize kept the true identities in {} of 20 samples", 20 - changed);
 }

@@ -292,13 +292,15 @@ impl Tokenizer {
             let mut t = Token::new(TokClass::Object);
             t.cat[0] = o.template + 1;
             t.cat[1] = o.kind as u16 + 1;
-            t.cat[2] = o.owner_rel as u16 + 1;
-            t.cat[3] = o.controller_rel as u16 + 1;
+            // 0 = nobody (unclaimed shared object), as for zone owners.
+            let rel1 = |r: u8| if r == NO_REL { 0 } else { r + 1 };
+            t.cat[2] = rel1(o.owner_rel) as u16;
+            t.cat[3] = rel1(o.controller_rel) as u16;
             let zdef = v.zones[o.zone as usize].def;
             t.cat[4] = zdef as u16 + 1;
             t.sem = [
-                o.owner_rel + 1,
-                o.controller_rel + 1,
+                rel1(o.owner_rel),
+                rel1(o.controller_rel),
                 match game.def.zones[zdef as usize].vis {
                     Visibility::Public => 1,
                     Visibility::Private => 2,
@@ -315,8 +317,12 @@ impl Tokenizer {
             t.set(13, v.zones[o.zone as usize].size as f32);
             t.desc = d.templates[o.template as usize];
             toks.push(t);
-            add_rel(o0 + oi, p0 + o.owner_rel as usize, rel::OWNED_BY);
-            add_rel(o0 + oi, p0 + o.controller_rel as usize, rel::CONTROLLED_BY);
+            if o.owner_rel != NO_REL {
+                add_rel(o0 + oi, p0 + o.owner_rel as usize, rel::OWNED_BY);
+            }
+            if o.controller_rel != NO_REL {
+                add_rel(o0 + oi, p0 + o.controller_rel as usize, rel::CONTROLLED_BY);
+            }
             add_rel(o0 + oi, z0 + o.zone as usize, rel::LOCATED_IN);
             if let Some(par) = o.attached_to {
                 add_rel(o0 + oi, o0 + par as usize, rel::ATTACHED_TO);

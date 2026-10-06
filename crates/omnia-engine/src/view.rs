@@ -187,7 +187,8 @@ impl State {
                 template: ob.template,
                 kind: g.def.templates[ob.template as usize].kind,
                 owner_rel: self.rel(me, ob.owner),
-                controller_rel: self.rel(me, ob.controller),
+                // Unclaimed shared objects are run as seat 0 internally but have no controller.
+                controller_rel: if ob.owner == NO_PLAYER { NO_REL } else { self.rel(me, ob.controller) },
                 zone: ob.zone,
                 pos,
                 attrs,
@@ -314,7 +315,8 @@ impl State {
     /// Resample everything `observer` cannot see, consistently with the
     /// public structure (zone sizes, owners, allowed kinds). Object ids,
     /// positions and zones are preserved; only hidden identities are
-    /// permuted among hidden objects of the same owner. The returned state
+    /// permuted among hidden objects of the same owner (valid for every zone's
+    /// `allowed_kinds`, so the true identities are never kept as a fallback). The returned state
     /// is a valid simulator state for search.
     ///
     /// Limitation (v0): it does not condition on knowledge the observer has
@@ -324,7 +326,9 @@ impl State {
         let mut st = self.clone();
         let g = self.game.clone();
         let bit = 1u8 << observer;
-        for owner in 0..g.n() {
+        // Hidden identities are exchanged only among objects with the same
+        // owner; unclaimed shared objects (NO_PLAYER) form their own group.
+        for owner in (0..g.n()).chain(std::iter::once(NO_PLAYER)) {
             let hidden: Vec<ObjId> = (0..st.objs.len() as ObjId)
                 .filter(|o| {
                     let ob = &st.objs[*o as usize];
@@ -335,28 +339,33 @@ impl State {
                 continue;
             }
             let contents: Vec<(u16, [i32; MAX_ATTRS])> = hidden.iter().map(|o| (st.objs[*o as usize].template, st.objs[*o as usize].attrs)).collect();
+            // May identity `content` sit in the zone of hidden slot `slot`?
+            let fits = |st: &State, slot: usize, content: usize| match &st.zone_def_of(st.objs[hidden[slot] as usize].zone).allowed_kinds {
+                Some(k) => k.contains(&g.def.templates[contents[content].0 as usize].kind),
+                None => true,
+            };
+            let constrained = hidden.iter().any(|o| st.zone_def_of(st.objs[*o as usize].zone).allowed_kinds.is_some());
             let mut perm: Vec<usize> = (0..hidden.len()).collect();
-            let mut ok = false;
-            for _ in 0..24 {
+            if !constrained {
                 rng.shuffle(&mut perm);
-                ok = hidden.iter().enumerate().all(|(i, o)| {
-                    let zd = st.zone_def_of(st.objs[*o as usize].zone);
-                    match &zd.allowed_kinds {
-                        Some(k) => k.contains(&g.def.templates[contents[perm[i]].0 as usize].kind),
-                        None => true,
+            } else {
+                // The true assignment satisfies every zone constraint, so start
+                // from it and random-walk with swaps that keep all constraints
+                // satisfied. This always ends in a valid sample (never falls
+                // back to the true identities unless nothing else is possible).
+                for _ in 0..hidden.len() * 8 {
+                    let i = rng.below(hidden.len() as u64) as usize;
+                    let j = rng.below(hidden.len() as u64) as usize;
+                    if i != j && fits(&st, i, perm[j]) && fits(&st, j, perm[i]) {
+                        perm.swap(i, j);
                     }
-                });
-                if ok {
-                    break;
                 }
             }
-            if ok {
-                for (i, o) in hidden.iter().enumerate() {
-                    let (t, a) = contents[perm[i]];
-                    let ob = &mut st.objs[*o as usize];
-                    ob.template = t;
-                    ob.attrs = a;
-                }
+            for (i, o) in hidden.iter().enumerate() {
+                let (t, a) = contents[perm[i]];
+                let ob = &mut st.objs[*o as usize];
+                ob.template = t;
+                ob.attrs = a;
             }
         }
         st.rng = rng.fork();

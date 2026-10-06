@@ -53,7 +53,7 @@ impl State {
             PRef::Seat(i) => i.min(n - 1),
             PRef::OwnerOf(o) => {
                 let x = self.oref(o, c);
-                if x == NONE_OBJ {
+                if x == NONE_OBJ || self.objs[x as usize].owner == NO_PLAYER {
                     c.me
                 } else {
                     self.objs[x as usize].owner
@@ -94,7 +94,7 @@ impl State {
             ZWho::Active => out.push(base + self.active as u16),
             ZWho::OwnerOf(o) => {
                 let x = self.oref(o, c);
-                let owner = if x == NONE_OBJ { c.me } else { self.objs[x as usize].owner };
+                let owner = if x == NONE_OBJ || self.objs[x as usize].owner == NO_PLAYER { c.me } else { self.objs[x as usize].owner };
                 out.push(base + owner as u16)
             }
         }
@@ -660,6 +660,10 @@ impl State {
             ob.reveal = 0;
             if owner_of_zone != NO_PLAYER {
                 ob.controller = owner_of_zone;
+                // A shared-origin object is claimed by the first player zone it enters.
+                if ob.owner == NO_PLAYER {
+                    ob.owner = owner_of_zone;
+                }
             }
         }
         let len = self.zones[dst as usize].len();
