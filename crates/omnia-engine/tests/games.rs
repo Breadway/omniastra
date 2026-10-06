@@ -151,10 +151,10 @@ fn stack_and_counters_work_in_gambit() {
 #[test]
 fn relabelled_games_are_mechanically_equivalent() {
     use omnia_dsl::Relabel;
-    for name in GAMES {
+    for (name, relabel_seed) in GAMES.iter().flat_map(|n| [77u64, 1, 2, 3, 4, 5].map(|s| (*n, s))) {
         let path = format!("{}/../../games/{}.ron", env!("CARGO_MANIFEST_DIR"), name);
         let def = GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let mut rr = Rng::new(77);
+        let mut rr = Rng::new(relabel_seed);
         let rl = Relabel::random(&def, |n| rr.below(n));
         let def2 = rl.apply(&def);
         def2.check().unwrap_or_else(|e| panic!("{name}: relabelled game invalid: {e}"));
@@ -176,5 +176,25 @@ fn relabelled_games_are_mechanically_equivalent() {
         println!("{name}: orig {:?} relabelled {:?}", a, b);
         assert!((a.0 - b.0).abs() < 0.1, "{name}: win rate differs {a:?} vs {b:?}");
         assert!((a.1 - b.1).abs() / a.1 < 0.1, "{name}: length differs {a:?} vs {b:?}");
+    }
+}
+
+/// `EventSlot` constants must follow the id permutation, otherwise the
+/// skirmish death trigger watches the wrong attribute after relabelling.
+#[test]
+fn relabel_remaps_event_slot_constants() {
+    use omnia_dsl::{CmpOp, Cond, Expr, Relabel};
+    let path = format!("{}/../../games/skirmish.ron", env!("CARGO_MANIFEST_DIR"));
+    let def = GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for seed in 0..32u64 {
+        let mut rr = Rng::new(seed);
+        let rl = Relabel::random(&def, |n| rr.below(n));
+        let def2 = rl.apply(&def);
+        let Cond::And(parts) = &def2.triggers[0].cond else { panic!("unexpected trigger shape") };
+        let Cond::Cmp(a, CmpOp::Eq, b) = &parts[0] else { panic!("unexpected slot test") };
+        assert_eq!(**a, Expr::EventSlot);
+        assert_eq!(**b, Expr::Const(rl.attr[2] as i32), "seed {seed}");
+        let Cond::Cmp(lhs, CmpOp::Le, _) = &parts[1] else { panic!("unexpected health test") };
+        assert!(matches!(**lhs, Expr::Attr(_, id) if id == rl.attr[2]), "seed {seed}");
     }
 }
