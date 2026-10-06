@@ -171,12 +171,20 @@ pub struct ResultRow {
     pub seed: u64,
     pub target: String,
     pub arm: String,
+    /// Positions actually used (the requested budget clipped by the pool size).
     pub budget_positions: usize,
+    /// Requested budget this run belongs to (0 in logs written before it existed).
+    #[serde(default)]
+    pub budget_requested: usize,
     pub pretrain_set: Option<String>,
     pub pretrain: Option<Counters>,
     pub finetune: Counters,
     pub ft_steps: usize,
     pub best_step: usize,
+    /// Validation CE of the selected checkpoint on the *selection* split.
+    #[serde(default)]
+    pub select_ce: f32,
+    /// Policy CE of the selected checkpoint on the disjoint *report* split.
     pub val_ce: f32,
     pub val_top1: f32,
     pub val_value_mse: f32,
@@ -304,12 +312,14 @@ where
             }
         }
     }
-    let mut target_data: BTreeMap<usize, (Vec<Sample>, Vec<Sample>)> = BTreeMap::new();
+    let mut target_data: BTreeMap<usize, (Vec<Sample>, Vec<Sample>, Vec<Sample>)> = BTreeMap::new();
     for &k in &target_ids {
         let tr = generate_samples(&instances[k].game, instances[k].game_idx, instances[k].family_idx, &data_spec(&cfgv.data, cfgv.data.target_train_games, 5000 + k as u64));
         let va = generate_samples(&instances[k].game, instances[k].game_idx, instances[k].family_idx, &data_spec(&cfgv.data, cfgv.data.target_val_games, 9000 + k as u64));
-        println!("[{}] target {}: {} train / {} val positions", cfgv.name, instances[k].id, tr.len(), va.len());
-        target_data.insert(k, (tr, va));
+        // Disjoint fresh episodes: `va` selects the checkpoint, `te` is reported.
+        let te = generate_samples(&instances[k].game, instances[k].game_idx, instances[k].family_idx, &data_spec(&cfgv.data, cfgv.data.target_val_games, 13000 + k as u64));
+        println!("[{}] target {}: {} train / {} select / {} report positions", cfgv.name, instances[k].id, tr.len(), va.len(), te.len());
+        target_data.insert(k, (tr, va, te));
     }
 
     let dev0 = devices[0].clone();
@@ -345,10 +355,11 @@ where
         // ---- fine-tuning per target / arm / budget -------------------------
         for &tk in &target_ids {
             let target = &instances[tk];
-            let (train_all, val_all) = &target_data[&tk];
+            let (train_all, val_all, test_all) = &target_data[&tk];
             let mut order: Vec<usize> = (0..train_all.len()).collect();
             Rng::new(seed ^ 0xF17E).shuffle(&mut order);
             let val_refs: Vec<&Sample> = val_all.iter().take(cfgv.finetune.val_positions).collect();
+            let test_refs: Vec<&Sample> = test_all.iter().take(cfgv.finetune.val_positions).collect();
             // fixed evaluation opponents/seeds across arms
             let opps: Vec<(String, AgentFactory)> = cfgv.eval.opponents.iter().map(|n| Ok((n.clone(), opponent_factory(&target.game, n)?))).collect::<Result<_>>()?;
 
@@ -391,6 +402,10 @@ where
                         let m = tr.valid();
                         let ev = evaluate_dataset::<B::InnerBackend>(&m, &mcfg, &val_refs, cfgv.eval.batch, &idev);
                         curve.push((step, ev.overall.policy_ce, ev.overall.top1));
+                        // The untrained step-0 model is not a candidate unless there is no training.
+                        if step == 0 && steps > 0 {
+                            return;
+                        }
                         if best.as_ref().map(|b| ev.overall.policy_ce < b.0).unwrap_or(true) {
                             *best = Some((ev.overall.policy_ce, step, m, ev.overall.clone()));
                         }
@@ -403,7 +418,10 @@ where
                             check(&tr, step, &mut curve, &mut best);
                         }
                     }
-                    let (val_ce, best_step, best_model, bm) = best.unwrap();
+                    let (select_ce, best_step, best_model, _) = best.unwrap();
+                    // Report on episodes the checkpoint was not selected on.
+                    let bm = evaluate_dataset::<B::InnerBackend>(&best_model, &mcfg, &test_refs, cfgv.eval.batch, &idev).overall;
+                    let val_ce = bm.policy_ce;
                     // strength of the selected checkpoint
                     let net = NetHandle::<B::InnerBackend> { model: Arc::new(best_model), cfg: Arc::new(mcfg.clone()), dev: idev.clone(), game_idx: target.game_idx, max_history: cfgv.data.max_history };
                     let mut strength = vec![];
@@ -420,11 +438,13 @@ where
                         target: target.id.clone(),
                         arm: arm.name.clone(),
                         budget_positions: n,
+                        budget_requested: budget,
                         pretrain_set: arm.pretrain.clone(),
                         pretrain: arm.pretrain.as_ref().map(|s| pretrained[s].1.clone()),
                         finetune: tr.counters.clone(),
                         ft_steps: steps,
                         best_step,
+                        select_ce,
                         val_ce,
                         val_top1: bm.top1,
                         val_value_mse: bm.value_mse,
@@ -486,7 +506,7 @@ fn equivalent_scratch_budget(scratch: &[(f32, f32)], ce: f32) -> Option<f32> {
 pub fn write_summary(dir: &Path, c: &TransferConfig, rows: &[ResultRow]) -> Result<()> {
     let mut s = String::new();
     s.push_str(&format!("# Transfer experiment `{}`\n\nmodel `{}`; seeds {:?}; target group `{}`; budgets {:?}.\n\n", c.name, c.model, c.seeds, c.target_group, c.finetune.budgets));
-    s.push_str("Metrics are means over seeds x targets (+- 95% CI over those runs). `val CE` is policy cross-entropy against the expert (MCTS) policy on held-out positions of the target game; strength is mean score of the raw greedy policy against the opponent panel. `fwd FLOPs` = total estimated training FLOPs (pretraining + fine-tuning).\n\n");
+    s.push_str("Metrics are means over seeds x targets (+- 95% CI over those runs). `val CE` is policy cross-entropy against the expert (MCTS) policy on a report split of fresh episodes of the target game, disjoint from the split used to select the checkpoint (step 0 is never selected); strength is mean score of the raw greedy policy against the opponent panel. `fwd FLOPs` = total estimated training FLOPs (pretraining + fine-tuning).\n\n");
     s.push_str("| arm | N | val CE | top1 | strength | data x vs scratch | ft updates | pretrain updates | total GFLOPs |\n|---|---|---|---|---|---|---|---|---|\n");
     let arms: Vec<String> = c.arms.iter().map(|a| a.name.clone()).collect();
     // scratch reference curve
@@ -494,17 +514,15 @@ pub fn write_summary(dir: &Path, c: &TransferConfig, rows: &[ResultRow]) -> Resu
     let mut scratch_curve: Vec<(f32, f32)> = vec![];
     if let Some(sn) = &scratch_name {
         for &b in &c.finetune.budgets {
-            let v: Vec<f32> = rows.iter().filter(|r| &r.arm == sn && r.budget_positions == b.min(r.budget_positions.max(b))).map(|r| r.val_ce).collect();
-            let v2: Vec<f32> = rows.iter().filter(|r| &r.arm == sn && budget_matches(r.budget_positions, b)).map(|r| r.val_ce).collect();
-            let _ = v;
-            if !v2.is_empty() {
-                scratch_curve.push((b as f32, mean_ci(&v2).0));
+            let v: Vec<f32> = rows.iter().filter(|r| &r.arm == sn && budget_matches(r, b)).map(|r| r.val_ce).collect();
+            if !v.is_empty() {
+                scratch_curve.push((b as f32, mean_ci(&v).0));
             }
         }
     }
     for arm in &arms {
         for &b in &c.finetune.budgets {
-            let rs: Vec<&ResultRow> = rows.iter().filter(|r| &r.arm == arm && budget_matches(r.budget_positions, b)).collect();
+            let rs: Vec<&ResultRow> = rows.iter().filter(|r| &r.arm == arm && budget_matches(r, b)).collect();
             if rs.is_empty() {
                 continue;
             }
@@ -525,6 +543,44 @@ pub fn write_summary(dir: &Path, c: &TransferConfig, rows: &[ResultRow]) -> Resu
     Ok(())
 }
 
-fn budget_matches(actual: usize, requested: usize) -> bool {
-    actual == requested || actual < requested // clipped by pool size
+/// A run belongs to a budget row only if it was *requested* with that budget
+/// (the used size may be clipped by the pool size). Logs from before
+/// `budget_requested` existed fall back to the used size.
+fn budget_matches(r: &ResultRow, requested: usize) -> bool {
+    let own = if r.budget_requested == 0 { r.budget_positions } else { r.budget_requested };
+    own == requested
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(requested: usize, used: usize) -> ResultRow {
+        serde_json::from_value(serde_json::json!({
+            "experiment": "t", "seed": 0, "target": "g", "arm": "scratch",
+            "budget_positions": used, "budget_requested": requested,
+            "pretrain_set": null, "pretrain": null,
+            "finetune": Counters::default(), "ft_steps": 1, "best_step": 1,
+            "val_ce": 1.0, "val_top1": 0.0, "val_value_mse": 0.0,
+            "strength": [], "mean_strength_score": 0.0, "curve": [], "params": 1
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn budget_rows_do_not_mix() {
+        // a 750 request clipped to 600 positions belongs to the 750 row only
+        let clipped = row(750, 600);
+        assert!(budget_matches(&clipped, 750));
+        assert!(!budget_matches(&clipped, 2250));
+        assert!(!budget_matches(&row(250, 250), 750));
+        assert!(!budget_matches(&row(250, 250), 2250));
+    }
+
+    #[test]
+    fn legacy_rows_fall_back_to_used_size() {
+        let legacy = row(0, 250);
+        assert!(budget_matches(&legacy, 250));
+        assert!(!budget_matches(&legacy, 750));
+    }
 }
