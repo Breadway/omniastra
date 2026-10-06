@@ -9,7 +9,7 @@ fn load(name: &str) -> Arc<Game> {
     Game::new(def).unwrap()
 }
 
-const GAMES: [&str; 3] = ["skirmish", "merchant", "gambit"];
+const GAMES: [&str; 4] = ["skirmish", "merchant", "gambit", "melee"];
 
 fn playout(game: &Arc<Game>, seed: u64) -> (Replay, State) {
     let mut rng = Rng::new(seed ^ 0xABCD);
@@ -410,4 +410,117 @@ fn replay_rejects_out_of_range_actions() {
     let (mut rep, _) = playout(&g, 3);
     rep.actions.push(0);
     assert!(rep.replay(&g).is_err());
+}
+
+// ---- multi-player (up to MAX_PLAYERS = 6) -----------------------------------
+
+#[test]
+fn zero_sum_payoffs_follow_one_rule_for_any_player_count() {
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+    for n in 2..=6usize {
+        // a sole winner scores +1, everyone else shares the debt
+        let mut w = vec![false; n];
+        w[1] = true;
+        let p = zero_sum_payoffs(&w);
+        assert!(close(p[1], 1.0));
+        for s in (0..n).filter(|s| *s != 1) {
+            assert!(close(p[s], -1.0 / (n - 1) as f32), "n={n} seat {s}: {}", p[s]);
+        }
+        assert!(close(p[..n].iter().sum::<f32>(), 0.0));
+        // everyone winning, or nobody, is a draw
+        assert!(zero_sum_payoffs(&vec![true; n]).iter().all(|x| *x == 0.0));
+        assert!(zero_sum_payoffs(&vec![false; n]).iter().all(|x| *x == 0.0));
+        // every split is zero-sum and within [-1, 1]
+        for k in 1..n {
+            let w: Vec<bool> = (0..n).map(|s| s < k).collect();
+            let p = zero_sum_payoffs(&w);
+            assert!(close(p[..n].iter().sum::<f32>(), 0.0), "n={n} k={k}");
+            assert!(p[..n].iter().all(|x| (-1.0..=1.0).contains(x)));
+            assert!(p[n..].iter().all(|x| *x == 0.0), "unused seats must stay 0");
+        }
+    }
+}
+
+#[test]
+fn games_run_with_two_to_six_players() {
+    for name in ["gambit", "skirmish", "merchant"] {
+        for n in 2..=6u8 {
+            let mut def = load_def(name);
+            def.num_players = n;
+            // more players can chain more responses onto the stack than the 2-player limit allows
+            def.limits.max_stack = 8 * n as u32;
+            def.check().unwrap_or_else(|e| panic!("{name} with {n} players: {e}"));
+            let g = Game::new(def).unwrap();
+            for seed in 0..40u64 {
+                let mut st = State::new(&g, seed);
+                let mut rng = Rng::new(seed);
+                while !st.is_terminal() {
+                    let k = st.legal_actions().len();
+                    st.apply(rng.below(k as u64) as usize);
+                }
+                assert!(st.fault().is_none(), "{name} n={n} seed {seed}: {:?}", st.fault());
+                let p = st.payoffs().unwrap();
+                assert!(p[..n as usize].iter().sum::<f32>().abs() < 1e-5, "{name} n={n} seed {seed}: payoffs {p:?} are not zero-sum");
+                assert!(p[..n as usize].iter().all(|x| (-1.0..=1.0).contains(x)));
+            }
+        }
+    }
+}
+
+#[test]
+fn player_count_is_limited_to_two_through_six() {
+    let mut def = load_def("gambit");
+    for (n, ok) in [(1u8, false), (2, true), (6, true), (7, false)] {
+        def.num_players = n;
+        assert_eq!(def.check().is_ok(), ok, "num_players {n}");
+    }
+}
+
+#[test]
+fn melee_has_six_seats_and_player_targets_hit_the_chosen_player() {
+    let g = load("melee");
+    assert_eq!(g.n(), 6);
+    let mut st = State::new(&g, 3);
+    // raid actions offer one target per other player
+    let raids: Vec<_> = st.legal_actions().iter().filter(|a| g.def.actions[a.def as usize].name == "raid").cloned().collect();
+    let victims: std::collections::BTreeSet<u8> = raids.iter().map(|a| match a.targets[0] { Target::Player(p) => p, _ => panic!("raid target must be a player") }).collect();
+    assert_eq!(victims, (1..6).collect(), "seat 0 can raid each of the other five seats");
+    // let seat 0 score twice, so there are points to steal, then pass the turn around to seat 4
+    for _ in 0..2 {
+        let i = st.legal_actions().iter().position(|a| g.def.actions[a.def as usize].name == "score").unwrap();
+        st.apply(i);
+    }
+    let end = |st: &mut State| {
+        let i = st.legal_actions().iter().position(|a| g.def.actions[a.def as usize].name == "end_turn").unwrap();
+        st.apply(i);
+    };
+    end(&mut st);
+    for _ in 1..4 {
+        end(&mut st);
+    }
+    assert_eq!(st.active_player(), 4);
+    let before: Vec<i32> = (0..6).map(|p| st.resource(p, 0)).collect();
+    assert_eq!(before[0], 2);
+    // seat 4 raids seat 0: only seat 0 loses points, only seat 4 gains
+    let i = st.legal_actions().iter().position(|a| g.def.actions[a.def as usize].name == "raid" && matches!(a.targets[0], Target::Player(0))).unwrap();
+    st.apply(i);
+    let after: Vec<i32> = (0..6).map(|p| st.resource(p, 0)).collect();
+    assert_eq!(after[0], 0, "target lost 2");
+    assert_eq!(after[4], 1, "raider gained 1");
+    assert_eq!((1..4).map(|p| after[p] - before[p]).sum::<i32>() + (after[5] - before[5]), 0, "bystanders untouched");
+}
+
+#[test]
+fn validator_checks_player_target_references() {
+    use omnia_dsl::{Effect, Expr, PRef};
+    let mut def = load_def("melee");
+    assert!(omnia_dsl::validate(&def).is_empty());
+    // referring to a target that does not exist
+    def.actions[0].effect = Effect::ModRes(PRef::Target(0), 0, Expr::Const(1));
+    assert!(omnia_dsl::validate(&def).iter().any(|e| e.contains("not in scope")), "{:?}", omnia_dsl::validate(&def));
+    // referring to a target that is not a player (a number)
+    let mut def = load_def("melee");
+    def.actions[0].targets = vec![omnia_dsl::TargetSpec::Number { lo: Expr::Const(1), hi: Expr::Const(2) }];
+    def.actions[0].effect = Effect::ModRes(PRef::Target(0), 0, Expr::Const(1));
+    assert!(omnia_dsl::validate(&def).iter().any(|e| e.contains("does not refer to a Player target")), "{:?}", omnia_dsl::validate(&def));
 }

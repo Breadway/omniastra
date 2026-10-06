@@ -204,10 +204,11 @@ fn main() -> Result<()> {
             let (mut w, mut l, mut d) = (0, 0, 0);
             let mut dec = 0.0;
             for i in 0..games {
-                // Alternate seats so first-player advantage does not count as skill.
-                let swap = i % 2 == 1;
-                let mut agents = if swap { vec![agent_from(&p2, &g)?, agent_from(&p1, &g)?] } else { vec![agent_from(&p1, &g)?, agent_from(&p2, &g)?] };
-                let seat1 = swap as usize; // seat of p1 in this game
+                // p1 rotates through the seats so seat advantages do not count as skill;
+                // p2 plays every other seat.
+                let players = g.n() as usize;
+                let seat1 = i as usize % players; // seat of p1 in this game
+                let mut agents = (0..players).map(|s| agent_from(if s == seat1 { &p1 } else { &p2 }, &g)).collect::<Result<Vec<_>>>()?;
                 let s = seed + i as u64;
                 let mut st = State::new(&g, s);
                 let mut rng = Rng::new(s ^ 0x5EED);
@@ -222,7 +223,7 @@ fn main() -> Result<()> {
                     st.apply(idx);
                 }
                 let pay = st.payoffs().unwrap();
-                let (mine, theirs) = (pay[seat1], pay[1 - seat1]);
+                let mine = pay[seat1];
                 if trace && i == 0 {
                     println!("result: {:?} ({:?})", &pay[..g.n() as usize], st.outcome().unwrap().reason);
                     describe::state(&st);
@@ -231,21 +232,22 @@ fn main() -> Result<()> {
                     std::fs::write(path, serde_json::to_string_pretty(&rep)?)?;
                 }
                 dec += st.decisions() as f64;
-                if mine > 0.0 {
+                if mine > 1e-6 {
                     w += 1
-                } else if theirs > 0.0 {
+                } else if mine < -1e-6 {
                     l += 1
                 } else {
                     d += 1
                 }
             }
-            println!("{p1} vs {p2} (seats alternate; {p1} moves first in even-numbered games): {p1} {w} wins, {l} losses, {d} draws over {games} games; avg decisions {:.1}", dec / games as f64);
+            println!("{p1} (rotating seat) vs {p2} (all other seats): {p1} {w} wins, {l} losses, {d} draws over {games} games; avg decisions {:.1}", dec / games as f64);
             Ok(())
         }
         Cmd::Simulate { game, games } => {
             let g = load(&game)?;
             let t = Instant::now();
-            let (mut w0, mut w1, mut dr, mut dec, mut to) = (0, 0, 0, 0u64, 0);
+            let players = g.n() as usize;
+            let (mut wins, mut dr, mut dec, mut to) = (vec![0u32; players], 0, 0u64, 0);
             for s in 0..games as u64 {
                 let mut st = State::new(&g, s);
                 let mut rng = Rng::new(s + 17);
@@ -258,16 +260,16 @@ fn main() -> Result<()> {
                 if matches!(o.reason, EndReason::Timeout) {
                     to += 1;
                 }
-                if o.payoffs[0] > 0.0 {
-                    w0 += 1
-                } else if o.payoffs[1] > 0.0 {
-                    w1 += 1
-                } else {
+                let winners: Vec<usize> = (0..players).filter(|p| o.payoffs[*p] > 0.0).collect();
+                if winners.is_empty() {
                     dr += 1
+                }
+                for p in winners {
+                    wins[p] += 1;
                 }
             }
             let el = t.elapsed().as_secs_f64();
-            println!("{} games in {:.2}s ({:.0} games/s, {:.0} decisions/s): p0 {w0} p1 {w1} draw {dr} timeouts {to}; avg decisions {:.1}", games, el, games as f64 / el, dec as f64 / el, dec as f64 / games as f64);
+            println!("{} games in {:.2}s ({:.0} games/s, {:.0} decisions/s): wins by seat {wins:?} draws {dr} timeouts {to}; avg decisions {:.1}", games, el, games as f64 / el, dec as f64 / el, dec as f64 / games as f64);
             Ok(())
         }
         Cmd::Replay { file, game } => {

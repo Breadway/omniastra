@@ -11,7 +11,7 @@ Workspace (`crates/`): `omnia-dsl` (game IR), `omnia-engine` (deterministic simu
 `omnia-gen` (procedural game families + controls), `omnia-observation` (variable-length tokens),
 `omnia-model` (Burn Transformer), `omnia-search` (agents, ISMCTS), `omnia-training`,
 `omnia-eval` (matches, transfer runner, self-play), `omnia-cli` (binary `omnia`).
-Hand-written games live in `games/`, experiment configs in `experiments/`.
+Hand-written games live in `games/` (including `melee`, a six-player free-for-all), experiment configs in `experiments/`.
 
 ```
 cargo test --release --workspace

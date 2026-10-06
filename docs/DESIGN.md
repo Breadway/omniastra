@@ -89,6 +89,14 @@ stack.
 
 * **Players, resources, attributes, vars**: generic typed integers with min/max; resources can be
   public or owner-only. No resource has built-in meaning.
+* **Player count**: 2 to 6 players (`MAX_PLAYERS`). `Opp` is the next seat in turn order (the
+  opponent only in 2-player games); to act on one chosen player use a `Player` action target and
+  refer to it as `PRef::Target(i)`, or `ForEachPlayer(Others, ..)` for everybody else.
+* **Payoffs** are zero-sum and in [-1, 1] for any player count: a sole winner scores +1 and
+  each other player `-1/(n-1)`; players winning (or, if nobody wins, surviving) together share
+  the win on the same scale; everyone or nobody winning is a draw. A timeout awards the
+  `Timeout::ByResource` leaders the same way. The more stack-heavy the game, the deeper the
+  stack gets with more players, so scale `limits.max_stack` with the player count.
 * **Zones**: per-player or shared; ordered/unordered; visibility `Public | Private | Hidden`;
   capacity; allowed object kinds. Zone *names* are labels only.
 * **Objects**: template (kind, attrs, hooks, triggers, modifiers), owner, controller, zone,
@@ -153,7 +161,7 @@ space. Statistical power on *diversity* needs far more families than this; see �
 
 ## 6. Observation and rule descriptors
 
-One flat token list per decision: `[global | players | zones | objects | events | actions]`.
+One flat token list per decision: `[global | players | zones | objects | stack | events | actions]`.
 Each token carries: game-local ids (`cat`), game-independent semantic categoricals (`sem`:
 relative seat, generic event kind, visibility class…), raw numeric slots (+mask), a static
 descriptor `desc[16]`, and (events) an order index. Relations are typed directed edges
@@ -240,8 +248,9 @@ scale-up path is GPU (`--features cuda|wgpu`), untested.
 * Expert targets come from low-budget rollout MCTS, whose own policy noise sets a CE floor.
 * Neural MCTS inference is per-leaf (no batched evaluation / virtual loss yet).
 * Self-play/league is implemented and unit-exercised only at toy scale.
-* No rule tokens, no belief model, no replacement effects, 2-player families only (engine
-  supports ≤4 players; value head has 4 seat outputs).
+* No rule tokens, no belief model, no replacement effects, 2-player families only (the engine,
+  value head and evaluation support up to 6 players; the one multi-player game is the
+  hand-written `games/melee.ron`, and no generator family produces more than two players yet).
 * Multi-device training uses host-side gradient reduction through Burn's accumulator; NCCL/Burn
   `collective` all-reduce is not wired, and no multi-GPU run was performed.
 

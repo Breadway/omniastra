@@ -67,6 +67,10 @@ impl State {
                     self.objs[x as usize].controller
                 }
             }
+            PRef::Target(i) => match c.targets.get(i as usize) {
+                Some(Target::Player(p)) => *p,
+                _ => c.me,
+            },
             PRef::EventActor => match &c.ev {
                 Some(e) if e.actor != NO_PLAYER => e.actor,
                 _ => c.me,

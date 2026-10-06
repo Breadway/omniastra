@@ -135,6 +135,26 @@ pub struct Delayed {
     pub effect: Effect,
 }
 
+/// Zero-sum payoffs in [-1, 1] for any number of players. `winners[p]` marks
+/// the players sharing the win. The side with fewer members scores +1 / -1 and
+/// the other side is scaled so the total is exactly zero: one winner among
+/// `n` scores +1 and every other player scores `-1 / (n - 1)`; if everyone (or
+/// nobody) is a winner the result is a draw (all zeros).
+pub fn zero_sum_payoffs(winners: &[bool]) -> [f32; MAX_PLAYERS] {
+    let n = winners.len();
+    let w = winners.iter().filter(|x| **x).count();
+    let l = n - w;
+    let mut pay = [0f32; MAX_PLAYERS];
+    if w == 0 || l == 0 {
+        return pay;
+    }
+    let (win_pay, lose_pay) = if w <= l { (1.0, -(w as f32) / l as f32) } else { (l as f32 / w as f32, -1.0) };
+    for (p, is_w) in winners.iter().enumerate() {
+        pay[p] = if *is_w { win_pay } else { lose_pay };
+    }
+    pay
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Fault {
     StepLimit,

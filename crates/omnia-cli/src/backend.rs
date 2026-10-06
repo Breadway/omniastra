@@ -4,7 +4,6 @@
 use anyhow::{anyhow, Result};
 use burn::module::Module;
 use burn::tensor::backend::Backend;
-use omnia_dsl::MAX_PLAYERS;
 use omnia_engine::*;
 use omnia_gen::*;
 use omnia_model::*;
@@ -66,9 +65,9 @@ fn probe_samples(g: &Arc<Game>, n: usize, max_history: usize) -> Vec<Sample> {
         let mut pi = vec![0.0; na];
         let k = rng.below(na as u64) as usize;
         pi[k] = 1.0;
-        let mut v = [0.0; MAX_PLAYERS];
-        v[0] = if rng.f32() < 0.5 { 1.0 } else { -1.0 };
-        v[1] = -v[0];
+        let winner = rng.f32() < 0.5;
+        let winners: Vec<bool> = (0..g.n() as usize).map(|p| (p == 0) == winner).collect();
+        let v = omnia_engine::zero_sum_payoffs(&winners);
         out.push(Sample { obs, pi, value: v, game_idx: 0, family_idx: 0 });
         st.apply(k);
     }

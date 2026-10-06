@@ -164,8 +164,12 @@ pub struct GameStats {
     pub random_games: u32,
     pub avg_decisions: f32,
     pub avg_branching: f32,
+    /// Win rate of seat 0 / seat 1 under random play.
     pub p0_win_rate: f32,
     pub p1_win_rate: f32,
+    /// Win rate of every seat under random play (`p0`/`p1` are its first two entries).
+    #[serde(default)]
+    pub seat_win_rates: Vec<f32>,
     pub draw_rate: f32,
     pub timeout_rate: f32,
     pub fault_rate: f32,
@@ -204,7 +208,8 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
     let game = Game::new(def.clone()).map_err(|e| e.to_string())?;
     let mut st_ = GameStats { random_games: cfg.random_games, ..Default::default() };
     let (mut dec, mut branch, mut nb) = (0.0f64, 0.0f64, 0.0f64);
-    let (mut w0, mut w1, mut dr, mut to, mut fa) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let players = game.n() as usize;
+    let (mut wins, mut dr, mut to, mut fa) = (vec![0u32; players], 0u32, 0u32, 0u32);
     let mut first_fault = None;
     for seed in 0..cfg.random_games as u64 {
         let mut rng = Rng::new(seed ^ 0xBEEF);
@@ -228,19 +233,18 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
             _ => {}
         }
         dec += st.decisions() as f64;
-        if o.payoffs[0] > 0.0 {
-            w0 += 1
-        } else if o.payoffs[1] > 0.0 {
-            w1 += 1
-        } else {
-            dr += 1
+        // a seat wins when its payoff is positive; a shared win or a draw is no win
+        match (0..players).filter(|p| o.payoffs[*p] > 0.0).collect::<Vec<_>>().as_slice() {
+            [] => dr += 1,
+            ws => ws.iter().for_each(|p| wins[*p] += 1),
         }
     }
     let n = cfg.random_games as f32;
     st_.avg_decisions = (dec / n as f64) as f32;
     st_.avg_branching = (branch / nb.max(1.0)) as f32;
-    st_.p0_win_rate = w0 as f32 / n;
-    st_.p1_win_rate = w1 as f32 / n;
+    st_.seat_win_rates = wins.iter().map(|w| *w as f32 / n).collect();
+    st_.p0_win_rate = st_.seat_win_rates[0];
+    st_.p1_win_rate = st_.seat_win_rates[1];
     st_.draw_rate = dr as f32 / n;
     st_.timeout_rate = to as f32 / n;
     st_.fault_rate = fa as f32 / n;
@@ -255,20 +259,19 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
         return Err(format!("too many timeouts ({:.2})", st_.timeout_rate));
     }
     let random_outcome = def.adjudication == Adjudication::Random;
-    if !random_outcome && (st_.p0_win_rate < cfg.min_side_win_rate || st_.p1_win_rate < cfg.min_side_win_rate) {
-        return Err(format!("degenerate side balance under random play (p0 {:.2} p1 {:.2})", st_.p0_win_rate, st_.p1_win_rate));
+    // The balanced win rate is 1/players, so the floor scales with it (as given for 2 players).
+    let floor = cfg.min_side_win_rate * 2.0 / players as f32;
+    if !random_outcome && st_.seat_win_rates.iter().any(|r| *r < floor) {
+        return Err(format!("degenerate side balance under random play (seat win rates {:.2?}, floor {:.2})", st_.seat_win_rates, floor));
     }
     if cfg.check_skill && !random_outcome {
         let mut mc = 0.0;
         let mut he = 0.0;
         for s in 0..cfg.skill_games as u64 {
-            let seat = (s % 2) as usize;
+            let seat = s as usize % players;
             let mk = |agent: Box<dyn Agent>| -> Vec<Box<dyn Agent>> {
-                if seat == 0 {
-                    vec![agent, Box::new(RandomAgent)]
-                } else {
-                    vec![Box::new(RandomAgent), agent]
-                }
+                let mut agent = Some(agent);
+                (0..players).map(|p| if p == seat { agent.take().unwrap() } else { Box::new(RandomAgent) as Box<dyn Agent> }).collect()
             };
             let (p, _) = play_game(&game, &mut mk(Box::new(MctsAgent::rollout(def, cfg.mcts_sims))), 5000 + s);
             mc += score(p[seat]);
