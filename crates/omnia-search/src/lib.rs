@@ -53,7 +53,7 @@ impl GoalModel {
                         };
                         let i = *r as usize;
                         w[i] += if good_up { 1.0 } else { -1.0 };
-                        sc[i] = (k.abs() as f32).max(1.0);
+                        sc[i] = (k.unsigned_abs() as f32).max(1.0);
                     }
                 }
                 _ => {}

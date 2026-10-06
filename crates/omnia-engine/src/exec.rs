@@ -251,7 +251,7 @@ impl State {
                 None => 0,
             },
             Expr::EventSlot => c.ev.as_ref().map(|e| e.slot).unwrap_or(-1),
-            Expr::Neg(a) => -self.eval(a, c),
+            Expr::Neg(a) => self.eval(a, c).saturating_neg(),
             Expr::Add(a, b) => self.eval(a, c).saturating_add(self.eval(b, c)),
             Expr::Sub(a, b) => self.eval(a, c).saturating_sub(self.eval(b, c)),
             Expr::Mul(a, b) => self.eval(a, c).saturating_mul(self.eval(b, c)),
@@ -261,7 +261,7 @@ impl State {
                 if d == 0 {
                     0
                 } else {
-                    n / d
+                    n.saturating_div(d)
                 }
             }
             Expr::Min(a, b) => self.eval(a, c).min(self.eval(b, c)),

@@ -249,15 +249,19 @@ impl State {
             EndReason::Rules if !fault => {
                 let nonlose: Vec<usize> = (0..n).filter(|p| lose & (1 << p) == 0).collect();
                 if win != 0 {
-                    let winners = (0..n).filter(|p| win & (1 << p) != 0 && lose & (1 << p) == 0).count().max(1) as f32;
+                    // A sole winner scores +1 and everyone else -1. Winners that
+                    // win simultaneously share the win and score 0 each (a draw
+                    // among them), so two-player games stay zero-sum.
+                    let is_winner = |p: usize| win & (1 << p) != 0 && lose & (1 << p) == 0;
+                    let winners = (0..n).filter(|p| is_winner(*p)).count();
                     for p in 0..n {
-                        pay[p] = if win & (1 << p) != 0 && lose & (1 << p) == 0 { 1.0 / winners.max(1.0) * if winners > 1.0 { 1.0 } else { 1.0 } } else { -1.0 };
-                    }
-                    // Shared wins score +1 each (cooperative tie): keep within [-1,1].
-                    for p in 0..n {
-                        if win & (1 << p) != 0 && lose & (1 << p) == 0 {
-                            pay[p] = 1.0;
-                        }
+                        pay[p] = if !is_winner(p) {
+                            -1.0
+                        } else if winners == 1 {
+                            1.0
+                        } else {
+                            0.0
+                        };
                     }
                 } else if lose != 0 {
                     for p in 0..n {
@@ -327,10 +331,16 @@ impl State {
     fn enum_targets(&mut self, g: &Game, di: usize, d: &ActionDef, k: usize, c: &mut Ctx, out: &mut Vec<Action>) {
         if k == d.targets.len() {
             // costs
+            // Costs are paid together, so check the total per resource.
+            let mut total = [0i32; MAX_RESOURCES];
             for (r, x) in &d.costs {
                 let amt = self.eval(x, c);
+                if amt < 0 {
+                    return;
+                }
+                total[*r as usize] = total[*r as usize].saturating_add(amt);
                 let min = g.def.resources[*r as usize].min;
-                if self.res[c.me as usize][*r as usize] - amt < min || amt < 0 {
+                if self.res[c.me as usize][*r as usize].saturating_sub(total[*r as usize]) < min {
                     return;
                 }
             }
@@ -399,7 +409,7 @@ impl State {
         // Pay costs.
         for (r, x) in &d.costs {
             let amt = self.eval(x, &mut c);
-            self.change_res(a.actor, *r, -amt, false, a.actor, a.source);
+            self.change_res(a.actor, *r, amt.saturating_neg(), false, a.actor, a.source);
         }
         // Record the action in history (targets limited to first two objects).
         let mut tg = [NONE_OBJ; 2];

@@ -316,3 +316,47 @@ fn countered_spells_leave_limbo() {
     }
     assert!(saw_cancel, "no counter ever cancelled a spell");
 }
+
+#[test]
+fn costs_are_checked_cumulatively() {
+    use omnia_dsl::Expr;
+    let castable = |costs: Vec<(u8, Expr)>| {
+        let mut def = load_def("gambit");
+        def.actions[0].costs = costs;
+        let g = Game::new(def).unwrap();
+        // focus is 3 on turn 1, cast is the action with def 0
+        (0..30).any(|seed| State::new(&g, seed).legal_actions().iter().any(|a| a.def == 0))
+    };
+    assert!(castable(vec![(1, Expr::Const(2))]), "a single cost of 2 fits in 3 focus");
+    assert!(!castable(vec![(1, Expr::Const(2)), (1, Expr::Const(2))]), "two costs of 2 on the same resource need 4 focus");
+}
+
+#[test]
+fn extreme_arithmetic_does_not_panic() {
+    use omnia_dsl::{Effect, Expr, PRef};
+    let mut def = load_def("gambit");
+    let b = |e: Expr| Box::new(e);
+    def.actions[2].effect = Effect::Seq(vec![
+        Effect::ModRes(PRef::Me, 0, Expr::Neg(b(Expr::Const(i32::MIN)))),
+        Effect::ModRes(PRef::Me, 0, Expr::Div(b(Expr::Const(i32::MIN)), b(Expr::Const(-1)))),
+        Effect::ModRes(PRef::Me, 0, Expr::Rand(i32::MIN, i32::MAX)),
+        Effect::EndTurn,
+    ]);
+    let g = Game::new(def).unwrap();
+    let mut st = State::new(&g, 1);
+    let end = st.legal_actions().iter().position(|a| a.def == 2).unwrap();
+    st.apply(end); // must not panic on i32::MIN negation / division / full-range Rand
+    assert!(st.fault().is_none());
+}
+
+#[test]
+fn simultaneous_wins_are_a_draw_not_two_winners() {
+    use omnia_dsl::{Cond, PlayerResult, TerminalRule};
+    let mut def = load_def("gambit");
+    def.terminal = vec![TerminalRule { cond: Cond::True, result: PlayerResult::Win }];
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 1);
+    let pay = st.payoffs().expect("game ends immediately");
+    assert_eq!(&pay[..2], &[0.0, 0.0], "both players won at once");
+    assert_eq!(pay[0] + pay[1], 0.0, "two-player payoffs must be zero-sum");
+}
