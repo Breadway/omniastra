@@ -67,8 +67,13 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
     // Spells.
     let mut hooks_used = 0;
     if !alt && chance(rng, 0.7) {
-        let d = range(rng, 2, 4) * if inverted { 1 } else { 1 };
-        let mut t = template("burn", 1, vec![(COST, range(rng, 2, 4))]);
+        // Both draws happen in every variant so the rng stream (and therefore
+        // every other generated choice) is the same; only the pairing differs.
+        let d_draw = range(rng, 2, 4);
+        let burn_cost = range(rng, 2, 4);
+        // Inverted: the cheap burn is the efficient one (damage falls as cost rises).
+        let d = if inverted { 6 - burn_cost } else { d_draw };
+        let mut t = template("burn", 1, vec![(COST, burn_cost)]);
         t.hooks.push((0, Effect::ModRes(PRef::Opp, LIFE, c(-d))));
         templates.push(t);
         weights.push(0.5 + rng.f32());

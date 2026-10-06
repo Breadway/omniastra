@@ -6,6 +6,9 @@
 use crate::ir::*;
 use std::cell::Cell;
 
+/// Number of action-class labels `Relabel::random` shuffles among themselves.
+pub const CLASS_LABELS: usize = 16;
+
 /// Which id space `Expr::EventSlot` indexes for the trigger being rewritten.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotSpace {
@@ -75,7 +78,10 @@ impl Relabel {
         shuf(&mut r.template, &mut below);
         shuf(&mut r.hook, &mut below);
         shuf(&mut r.action, &mut below);
-        let mut c: Vec<u8> = (0..16).collect();
+        // Class labels are small categorical ids; only the first CLASS_LABELS
+        // are permuted (higher ones stay put) so the labels the model sees
+        // remain in the range it is trained on.
+        let mut c: Vec<u8> = (0..CLASS_LABELS as u8).collect();
         shuf(&mut c, &mut below);
         for (i, x) in c.into_iter().enumerate() {
             r.class[i] = x;

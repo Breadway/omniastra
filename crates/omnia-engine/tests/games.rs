@@ -374,3 +374,17 @@ fn transform_spends_steps_so_it_cannot_dodge_the_budget() {
     st.apply(end);
     assert_eq!(st.fault(), Some(Fault::StepLimit));
 }
+
+#[test]
+fn relabel_permutes_class_labels_within_the_documented_range() {
+    use omnia_dsl::{relabel::CLASS_LABELS, Relabel};
+    let def = load_def("skirmish");
+    for seed in 0..8u64 {
+        let mut rr = Rng::new(seed);
+        let rl = Relabel::random(&def, |n| rr.below(n));
+        let mut head: Vec<u8> = rl.class[..CLASS_LABELS].to_vec();
+        head.sort();
+        assert_eq!(head, (0..CLASS_LABELS as u8).collect::<Vec<_>>(), "labels below {CLASS_LABELS} must be a permutation");
+        assert!(rl.class[CLASS_LABELS..].iter().enumerate().all(|(i, c)| *c as usize == CLASS_LABELS + i), "labels above stay in place");
+    }
+}

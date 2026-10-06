@@ -81,3 +81,23 @@ fn generate_set_reports_io_errors_and_unsupported_variants() {
     assert!(r.is_err(), "unsupported variant must be rejected");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn inverted_burn_is_cheap_when_strong() {
+    use omnia_dsl::{Effect, Expr};
+    // pair every burn's cost with its damage across seeds: inverted must slope downwards,
+    // so a generated inverted game never has the dearest burn deal the most damage.
+    let (mut seen, mut dmg_plus_cost) = (0, std::collections::BTreeSet::new());
+    for seed in 0..60u64 {
+        let spec = GenSpec { family: Family::Tempo, seed, variant: Variant::Inverted, relabel: false, random_reward: false };
+        let def = generate(&spec);
+        for t in def.templates.iter().filter(|t| t.name == "burn") {
+            let cost = t.attrs.iter().find(|(a, _)| *a == 0).unwrap().1;
+            let Effect::ModRes(_, _, Expr::Const(d)) = &t.hooks[0].1 else { panic!("unexpected burn hook") };
+            dmg_plus_cost.insert(cost + (-d));
+            seen += 1;
+        }
+    }
+    assert!(seen > 5, "no inverted burn spells were generated");
+    assert_eq!(dmg_plus_cost.len(), 1, "damage + cost must be constant in the inverted variant: {dmg_plus_cost:?}");
+}
