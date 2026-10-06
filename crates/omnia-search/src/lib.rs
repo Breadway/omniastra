@@ -3,7 +3,6 @@
 
 use omnia_dsl::*;
 use omnia_engine::*;
-use std::collections::HashMap;
 
 pub trait Agent: Send {
     fn name(&self) -> String;
@@ -110,11 +109,16 @@ impl Agent for HeuristicAgent {
             return rng.below(n as u64) as usize;
         }
         let me = st.decision_maker().unwrap();
+        // Look ahead in a world consistent with what `me` can see: hidden
+        // identities and the RNG stream are resampled, so the agent cannot
+        // exploit the true shuffle (it would otherwise see hidden draws).
+        let world = st.determinize(me, rng);
         let mut best = vec![];
         let mut best_v = f32::NEG_INFINITY;
         for i in 0..n {
-            let mut c = st.clone();
-            c.apply(i);
+            let Some(wi) = world.find_action(&st.legal_actions()[i]) else { continue };
+            let mut c = world.clone();
+            c.apply(wi);
             let v = match c.payoffs() {
                 Some(p) => p[me as usize] * 100.0,
                 None => self.goal.margin(&c, me),
@@ -126,6 +130,9 @@ impl Agent for HeuristicAgent {
             } else if (v - best_v).abs() <= 1e-6 {
                 best.push(i);
             }
+        }
+        if best.is_empty() {
+            return rng.below(n as u64) as usize;
         }
         best[rng.below(best.len() as u64) as usize]
     }
@@ -262,37 +269,21 @@ impl<E: Evaluator> Mcts<E> {
                 // Expansion: any legal action without an edge?
                 let untried: Vec<usize> = (0..legal.len()).filter(|li| !nodes[node].edges.iter().any(|e| e.action == legal[*li])).collect();
                 if !untried.is_empty() {
-                    // Evaluate node once to get priors for new edges.
+                    // Expand: one evaluation supplies both the priors of the new
+                    // edges and the value that is backed up for this leaf.
                     let ev = self.eval.evaluate(&mut st, rng);
-                    let k = untried[rng.below(untried.len() as u64) as usize];
                     for &li in &untried {
                         let prior = ev.priors.as_ref().map(|p| p[li]).unwrap_or(0.0);
                         let child = nodes.len();
                         nodes.push(Node { edges: vec![] });
                         nodes[node].edges.push(Edge { action: legal[li].clone(), child, visits: 0.0, avail: 0.0, total: 0.0, prior });
                     }
-                    // Choose the sampled untried edge (or highest prior when available).
-                    let ei = if ev.priors.is_some() {
-                        let mut best = untried[0];
-                        for &li in &untried {
-                            if ev.priors.as_ref().unwrap()[li] > ev.priors.as_ref().unwrap()[best] {
-                                best = li;
-                            }
-                        }
-                        nodes[node].edges.iter().position(|e| e.action == legal[best]).unwrap()
-                    } else {
-                        nodes[node].edges.iter().position(|e| e.action == legal[k]).unwrap()
-                    };
                     for ai in nodes[node].edges.iter_mut() {
                         if legal.contains(&ai.action) {
                             ai.avail += 1.0;
                         }
                     }
-                    path.push((node, ei, decider));
-                    let a = nodes[node].edges[ei].action.clone();
-                    let li = st.find_action(&a).unwrap();
-                    st.apply(li);
-                    leaf_eval = Some(if st.is_terminal() { Eval { priors: None, values: st.payoffs().unwrap() } } else { self.eval.evaluate(&mut st, rng) });
+                    leaf_eval = Some(ev);
                     break;
                 }
                 // Selection (UCB1 / PUCT with availability counts).
@@ -401,5 +392,3 @@ pub fn play_game(game: &std::sync::Arc<Game>, agents: &mut [Box<dyn Agent>], see
     (st.payoffs().unwrap(), st.decisions())
 }
 
-#[allow(dead_code)]
-type _Unused = HashMap<(), ()>;

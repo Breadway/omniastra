@@ -32,3 +32,82 @@ fn heuristic_and_mcts_beat_random() {
         assert!(h > 0.5 || m > 0.5, "{name}: neither generic agent beats random");
     }
 }
+
+/// Counts evaluator calls so tests can bound the search cost.
+struct CountingEval {
+    inner: RolloutEval,
+    calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl Evaluator for CountingEval {
+    fn evaluate(&mut self, st: &mut State, rng: &mut Rng) -> Eval {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.evaluate(st, rng)
+    }
+}
+
+#[test]
+fn mcts_uses_at_most_one_evaluation_per_simulation() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let (g, def) = load("skirmish");
+    for sims in [8u32, 30, 60] {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut mcts = Mcts::new(MctsConfig { sims, ..Default::default() }, CountingEval { inner: RolloutEval::new(&def), calls: calls.clone() });
+        let mut st = State::new(&g, 4);
+        let mut rng = Rng::new(9);
+        let r = mcts.search(&mut st, &mut rng);
+        assert_eq!(r.policy.len(), st.legal_actions().len());
+        assert!(calls.load(Ordering::SeqCst) <= sims, "{sims} sims used {} evaluations", calls.load(Ordering::SeqCst));
+    }
+}
+
+/// A game where one action peeks at the hidden top card: "gamble" pays +4 if the
+/// top card is a burst (cost attr 3) and 0 otherwise, "safe" always pays +2.
+/// A heuristic agent that reads the true state would gamble exactly when the
+/// real top card is a burst.
+fn gamble_game() -> Arc<Game> {
+    use omnia_dsl::*;
+    let (_, mut def) = load("gambit");
+    def.player_setup = vec![SetupEntry { zone: 0, template: 0, count: 1 }, SetupEntry { zone: 0, template: 1, count: 1 }];
+    def.setup = Effect::ForEachPlayer(PSel::All, Box::new(Effect::Shuffle(ZRef { who: ZWho::Me, zone: 0 })));
+    def.phases[0].on_enter = Effect::NoOp;
+    let top = Sel::Zones { zones: vec![ZRef { who: ZWho::Me, zone: 0 }], filter: Cond::True, order: SelOrder::Top(Box::new(Expr::Const(1))) };
+    let payoff = Expr::Mul(Box::new(Expr::Sub(Box::new(Expr::Attr(ORef::Iter, 0)), Box::new(Expr::Const(2)))), Box::new(Expr::Const(4)));
+    let gamble = ActionDef { name: "gamble".into(), class: 0, phases: vec![1], timing: Timing::Main, source: None, targets: vec![], costs: vec![], require: Cond::True, on_use: Effect::NoOp, effect: Effect::ForEach(top, Box::new(Effect::ModRes(PRef::Me, 0, payoff))), stack: false };
+    let safe = ActionDef { name: "safe".into(), effect: Effect::ModRes(PRef::Me, 0, Expr::Const(2)), ..gamble.clone() };
+    let safe = ActionDef { class: 1, ..safe };
+    let end_turn = def.actions[2].clone();
+    def.actions = vec![gamble, safe, end_turn];
+    def.check().unwrap();
+    Game::new(def).unwrap()
+}
+
+#[test]
+fn heuristic_agent_does_not_peek_at_hidden_draws() {
+    let g = gamble_game();
+    let deck0 = g.zone_base[0] as usize;
+    // one seed whose top card is the burst (template 1), one where it is not
+    let top_is_burst = |seed: u64| {
+        let st = State::new(&g, seed);
+        st.object(st.zone_contents(deck0)[0]).template == 1
+    };
+    let good = (0..64).find(|s| top_is_burst(*s)).unwrap();
+    let bad = (0..64).find(|s| !top_is_burst(*s)).unwrap();
+    let gamble_rate = |seed: u64| {
+        let mut gambles = 0;
+        for k in 0..200u64 {
+            let mut st = State::new(&g, seed);
+            let mut agent = HeuristicAgent::new(&g.def);
+            agent.epsilon = 0.0;
+            let mut rng = Rng::new(1000 + k);
+            let i = agent.act(&mut st, &mut rng);
+            if st.legal_actions()[i].def == 0 {
+                gambles += 1;
+            }
+        }
+        gambles as f32 / 200.0
+    };
+    let (a, b) = (gamble_rate(good), gamble_rate(bad));
+    // a cheating agent gambles 100% of the time in one world and 0% in the other
+    assert!((a - b).abs() < 0.25, "choice depends on the hidden top card: {a} vs {b}");
+}
