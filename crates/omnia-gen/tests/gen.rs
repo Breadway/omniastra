@@ -30,3 +30,29 @@ fn families_generate_valid_games_with_measured_stats() {
         }
     }
 }
+
+#[test]
+fn countered_spells_do_not_strand_cards_in_generated_stack_games() {
+    use omnia_engine::*;
+    let mut cancels = 0;
+    for seed in 0..12u64 {
+        let spec = GenSpec { family: Family::Stack, seed, variant: Variant::Normal, relabel: true, random_reward: false };
+        let def = generate(&spec);
+        let limbo_def = def.zones.iter().position(|z| z.name == "limbo").unwrap();
+        let g = Game::new(def).unwrap();
+        let limbo = g.zone_base[limbo_def] as usize;
+        for play in 0..40u64 {
+            let mut st = State::new(&g, play);
+            let mut rng = Rng::new(play + 100 * seed);
+            while !st.is_terminal() {
+                if st.stack_len() == 0 {
+                    assert!(st.zone_contents(limbo).is_empty(), "stack seed {seed} play {play}: card stuck in limbo");
+                }
+                let n = st.legal_actions().len();
+                st.apply(rng.below(n as u64) as usize);
+            }
+            cancels += st.history().iter().filter(|e| matches!(e.kind, omnia_dsl::EventKind::StackCancelled)).count();
+        }
+    }
+    assert!(cancels > 0, "no generated stack game ever cancelled a spell");
+}

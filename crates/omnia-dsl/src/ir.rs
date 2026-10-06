@@ -188,6 +188,11 @@ pub struct ActionDef {
     #[serde(default = "Effect::noop")]
     pub on_use: Effect,
     pub effect: Effect,
+    /// Runs instead of `effect` when a stacked action is countered
+    /// (`CancelStack`) or its source has vanished, with the same `Source` /
+    /// `Target(i)` bindings. Typically moves the source out of limbo.
+    #[serde(default = "Effect::noop")]
+    pub on_cancel: Effect,
     /// Goes on the stack and opens a response window.
     #[serde(default)]
     pub stack: bool,

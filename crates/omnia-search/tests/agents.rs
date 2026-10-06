@@ -73,7 +73,7 @@ fn gamble_game() -> Arc<Game> {
     def.phases[0].on_enter = Effect::NoOp;
     let top = Sel::Zones { zones: vec![ZRef { who: ZWho::Me, zone: 0 }], filter: Cond::True, order: SelOrder::Top(Box::new(Expr::Const(1))) };
     let payoff = Expr::Mul(Box::new(Expr::Sub(Box::new(Expr::Attr(ORef::Iter, 0)), Box::new(Expr::Const(2)))), Box::new(Expr::Const(4)));
-    let gamble = ActionDef { name: "gamble".into(), class: 0, phases: vec![1], timing: Timing::Main, source: None, targets: vec![], costs: vec![], require: Cond::True, on_use: Effect::NoOp, effect: Effect::ForEach(top, Box::new(Effect::ModRes(PRef::Me, 0, payoff))), stack: false };
+    let gamble = ActionDef { name: "gamble".into(), class: 0, phases: vec![1], timing: Timing::Main, source: None, targets: vec![], costs: vec![], require: Cond::True, on_use: Effect::NoOp, on_cancel: Effect::NoOp, effect: Effect::ForEach(top, Box::new(Effect::ModRes(PRef::Me, 0, payoff))), stack: false };
     let safe = ActionDef { name: "safe".into(), effect: Effect::ModRes(PRef::Me, 0, Expr::Const(2)), ..gamble.clone() };
     let safe = ActionDef { class: 1, ..safe };
     let end_turn = def.actions[2].clone();

@@ -254,6 +254,7 @@ pub fn analyze(g: &GameDef) -> GameDescriptors {
         let mut t = Tally::default();
         t.effect(&a.effect);
         t.effect(&a.on_use);
+        t.effect(&a.on_cancel);
         t.cond(&a.require);
         for (r, x) in &a.costs {
             t.expr(x);

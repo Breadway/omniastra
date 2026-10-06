@@ -450,6 +450,7 @@ pub fn validate(g: &GameDef) -> Vec<String> {
         v.cond(&a.require, &sc);
         v.effect(&a.on_use, &sc);
         v.effect(&a.effect, &sc);
+        v.effect(&a.on_cancel, &sc);
     }
     v.errs
 }

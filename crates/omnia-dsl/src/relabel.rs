@@ -278,6 +278,7 @@ impl Relabel {
                 require: self.cond(&a.require),
                 on_use: self.effect(&a.on_use),
                 effect: self.effect(&a.effect),
+                on_cancel: self.effect(&a.on_cancel),
                 stack: a.stack,
             })
             .collect();

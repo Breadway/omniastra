@@ -294,3 +294,25 @@ fn determinize_respects_zone_constraints_without_falling_back_to_truth() {
     }
     assert!(changed >= 10, "determinize kept the true identities in {} of 20 samples", 20 - changed);
 }
+
+/// A spell sits in limbo only while it is on the stack. Countering it must not
+/// strand it there (its normal effect, which discards it, never runs).
+#[test]
+fn countered_spells_leave_limbo() {
+    let g = load("gambit");
+    let limbo = g.zone_base[3] as usize;
+    let mut saw_cancel = false;
+    for seed in 0..300 {
+        let mut st = State::new(&g, seed);
+        let mut rng = Rng::new(seed + 1);
+        while !st.is_terminal() {
+            if st.stack_len() == 0 {
+                assert!(st.zone_contents(limbo).is_empty(), "seed {seed} turn {}: {} card(s) stuck in limbo", st.turn(), st.zone_contents(limbo).len());
+            }
+            let n = st.legal_actions().len();
+            st.apply(rng.below(n as u64) as usize);
+        }
+        saw_cancel |= st.history().iter().any(|e| matches!(e.kind, omnia_dsl::EventKind::StackCancelled));
+    }
+    assert!(saw_cancel, "no counter ever cancelled a spell");
+}

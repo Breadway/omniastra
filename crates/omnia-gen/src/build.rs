@@ -93,6 +93,7 @@ pub fn action(name: &str, class: u8, phases: Vec<u8>, timing: Timing, effect: Ef
         require: Cond::True,
         on_use: Effect::NoOp,
         effect,
+        on_cancel: Effect::NoOp,
         stack: false,
     }
 }

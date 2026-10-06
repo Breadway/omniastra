@@ -173,9 +173,7 @@ impl State {
         let all = self.all_mask();
         self.cause = item.cause_seq;
         if item.cancelled {
-            let m = self.obj_mask(item.source);
-            self.emit(EventKind::StackCancelled, item.actor, item.source, [NONE_OBJ; 2], item.def as i32, 0, 0, NO_ZONE, NO_ZONE, m, all);
-            let _ = self.drain_triggers();
+            self.cancel_item(&item);
         } else {
             let mut c = Ctx::new(item.actor);
             c.source = item.source;
@@ -187,9 +185,7 @@ impl State {
                 self.emit(EventKind::StackResolved, item.actor, item.source, [NONE_OBJ; 2], item.def as i32, 0, 0, NO_ZONE, NO_ZONE, m, all);
                 self.run_top(&def.effect, c);
             } else {
-                let m = self.obj_mask(item.source);
-                self.emit(EventKind::StackCancelled, item.actor, item.source, [NONE_OBJ; 2], item.def as i32, 0, 0, NO_ZONE, NO_ZONE, m, all);
-                let _ = self.drain_triggers();
+                self.cancel_item(&item);
             }
         }
         self.check_terminal();
@@ -198,6 +194,19 @@ impl State {
             Some(top) => self.next_player(top.actor),
             None => self.active,
         };
+    }
+
+    /// A countered (or fizzled) stack item: announce it and run its
+    /// `on_cancel` effect so e.g. the card does not stay in limbo.
+    fn cancel_item(&mut self, item: &StackItem) {
+        let g = self.game.clone();
+        let all = self.all_mask();
+        let m = self.obj_mask(item.source);
+        self.emit(EventKind::StackCancelled, item.actor, item.source, [NONE_OBJ; 2], item.def as i32, 0, 0, NO_ZONE, NO_ZONE, m, all);
+        let mut c = Ctx::new(item.actor);
+        c.source = item.source;
+        c.targets = item.targets.clone();
+        self.run_top(&g.def.actions[item.def as usize].on_cancel, c);
     }
 
     // ---- terminal handling -----------------------------------------------
