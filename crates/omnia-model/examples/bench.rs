@@ -75,6 +75,7 @@ fn main() {
             let y = q.clone().matmul(q.clone().swap_dims(2, 3));
             let _ = y.sum().into_scalar();
         }
+        println!("10x attn qk [32,4,71,32]x[..,32,71]: {:?}", t.elapsed());
         {
             use burn::nn::{EmbeddingConfig};
             use burn::tensor::Int;
@@ -122,7 +123,6 @@ fn main() {
             }
             println!("10x random+softmax [32,4,71,71]: {:?}", t.elapsed());
         }
-        println!("10x attn qk [32,4,71,32]x[..,32,71]: {:?}", t.elapsed());
     }
     let mut opt = AdamWConfig::new().init();
     for i in 0..4 {
@@ -137,6 +137,3 @@ fn main() {
         println!("iter {i}: fwd {:?} fwd+bwd {:?} step {:?}  => {:.0} samples/s", tf, tb, t.elapsed(), bs as f64 / t.elapsed().as_secs_f64());
     }
 }
-
-#[allow(dead_code)]
-fn unused() {}

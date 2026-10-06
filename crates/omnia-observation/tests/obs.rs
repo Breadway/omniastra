@@ -44,7 +44,6 @@ fn unordered_zone_order_does_not_change_observation() {
             break;
         }
         let p = st.decision_maker().unwrap();
-        let a = serde_json::to_string(&tk.observe(&mut st, p)).unwrap();
         let mut st2 = st.clone();
         // hand zone instances are the unordered ones (zone def 1)
         for inst in 0..g.n_instances {
@@ -60,7 +59,6 @@ fn unordered_zone_order_does_not_change_observation() {
         let s1 = serde_json::to_string(o1.state_tokens()).unwrap();
         let s2 = serde_json::to_string(o2.state_tokens()).unwrap();
         assert_eq!(s1, s2);
-        let _ = a;
         let n = st.legal_actions().len();
         st.apply(rng.below(n as u64) as usize);
     }

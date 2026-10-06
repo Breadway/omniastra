@@ -415,7 +415,6 @@ fn benchmark(game: Option<PathBuf>, model: &str, batch: usize) -> Result<()> {
     }
     println!("observation: {:.0}/s ({:.1} tokens avg)", count as f64 / t.elapsed().as_secs_f64(), toks as f64 / count as f64);
 
-    let t = Instant::now();
     let mut mcts = Mcts::new(MctsConfig { sims: 100, ..Default::default() }, RolloutEval::new(&g.def));
     let mut st = State::new(&g, 9);
     let mut rng = Rng::new(9);

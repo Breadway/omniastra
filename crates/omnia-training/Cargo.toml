@@ -19,8 +19,6 @@ burn = { version = "0.21", default-features = false, features = ["std", "autodif
 serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
-bincode = "1"
-blake3.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

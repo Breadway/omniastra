@@ -20,5 +20,3 @@ cargo run --release -p omnia-cli -- play games/skirmish.ron --p1 mcts:64 --p2 ra
 cargo run --release -p omnia-cli -- benchmark --model nano
 cargo run --release -p omnia-cli -- transfer experiments/smoke.json
 ```
-
-This project is independent of the Astra film project.

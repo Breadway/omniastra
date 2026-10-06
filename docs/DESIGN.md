@@ -11,8 +11,6 @@ about any individual game; games are data (OmniDSL programs). This document reco
 the decisions taken where the original specification was ambiguous or self-contradictory, and the
 known limitations.
 
-This is a **standalone** project; it does not use or modify the existing `astra/` code.
-
 ## 1. Status against the specification
 
 | Spec area | State |
