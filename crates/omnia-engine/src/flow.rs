@@ -247,47 +247,30 @@ impl State {
         let (win, lose) = (self.win_mask, self.lose_mask);
         match reason {
             EndReason::Rules if !fault => {
-                let nonlose: Vec<usize> = (0..n).filter(|p| lose & (1 << p) == 0).collect();
-                if win != 0 {
-                    // A sole winner scores +1 and everyone else -1. Winners that
-                    // win simultaneously share the win and score 0 each (a draw
-                    // among them), so two-player games stay zero-sum.
-                    let is_winner = |p: usize| win & (1 << p) != 0 && lose & (1 << p) == 0;
-                    let winners = (0..n).filter(|p| is_winner(*p)).count();
-                    for p in 0..n {
-                        pay[p] = if !is_winner(p) {
-                            -1.0
-                        } else if winners == 1 {
-                            1.0
-                        } else {
-                            0.0
-                        };
-                    }
+                // Winners are players flagged to win and not to lose. If nobody
+                // qualifies but some players lost, the survivors are the winners.
+                let winners: Vec<bool> = (0..n).map(|p| win & (1 << p) != 0 && lose & (1 << p) == 0).collect();
+                if winners.iter().any(|w| *w) {
+                    pay = zero_sum_payoffs(&winners);
                 } else if lose != 0 {
-                    for p in 0..n {
-                        pay[p] = if lose & (1 << p) != 0 { -1.0 } else if nonlose.len() == 1 { 1.0 } else { 0.0 };
-                    }
+                    let survivors: Vec<bool> = (0..n).map(|p| lose & (1 << p) == 0).collect();
+                    pay = zero_sum_payoffs(&survivors);
                 }
                 // draw_flag with no winners/losers => zeros
             }
             EndReason::Timeout => {
                 if let Timeout::ByResource(r) = g.def.timeout {
                     let best = (0..n).map(|p| self.res[p][r as usize]).max().unwrap();
-                    let top: Vec<usize> = (0..n).filter(|p| self.res[*p][r as usize] == best).collect();
-                    if top.len() == 1 {
-                        for p in 0..n {
-                            pay[p] = if p == top[0] { 1.0 } else { -1.0 };
-                        }
-                    }
+                    let top: Vec<bool> = (0..n).map(|p| self.res[p][r as usize] == best).collect();
+                    pay = zero_sum_payoffs(&top);
                 }
             }
             _ => {}
         }
         if g.def.adjudication == Adjudication::Random && !matches!(reason, EndReason::Fault(_)) {
             let w = self.rng.below(n as u64) as usize;
-            for p in 0..n {
-                pay[p] = if p == w { 1.0 } else { -1.0 };
-            }
+            let winners: Vec<bool> = (0..n).map(|p| p == w).collect();
+            pay = zero_sum_payoffs(&winners);
         }
         self.outcome = Some(Outcome { payoffs: pay, reason });
         self.legal.clear();

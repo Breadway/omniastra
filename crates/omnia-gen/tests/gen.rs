@@ -138,3 +138,16 @@ fn tug_is_seat_symmetric_and_zero_sum() {
         }
     }
 }
+
+#[test]
+fn measurement_reports_every_seat_of_a_six_player_game() {
+    let def = omnia_dsl::GameDef::from_ron(&std::fs::read_to_string(format!("{}/../../games/melee.ron", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+    let cfg = ValidationConfig { check_skill: true, skill_games: 12, mcts_sims: 24, min_skill: 0.5, random_games: 120, max_timeout_rate: 0.3, ..Default::default() };
+    let s = measure(&def, &cfg).expect("melee should pass measurement");
+    assert_eq!(s.seat_win_rates.len(), 6);
+    assert_eq!(s.p0_win_rate, s.seat_win_rates[0]);
+    assert_eq!(s.p1_win_rate, s.seat_win_rates[1]);
+    // under random play each seat wins about 1/6 of the games, and nobody is shut out
+    assert!(s.seat_win_rates.iter().all(|r| *r > 0.05), "{:?}", s.seat_win_rates);
+    assert!(s.mcts_vs_random.unwrap() > 0.5, "mcts should beat random in a 6-player free-for-all: {:?}", s.mcts_vs_random);
+}

@@ -413,7 +413,7 @@ mod tests {
         assert_ne!(s.state_hash(), h_delay, "delayed effect body");
 
         let mut s = base.clone();
-        s.outcome = Some(Outcome { payoffs: [1.0, -1.0, 0.0, 0.0], reason: EndReason::Rules });
+        s.outcome = Some(Outcome { payoffs: [1.0, -1.0, 0.0, 0.0, 0.0, 0.0], reason: EndReason::Rules });
         assert_ne!(s.state_hash(), h0, "outcome");
 
         let mut s = base.clone();

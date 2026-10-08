@@ -1,0 +1,37 @@
+#![enable(implicit_some)]
+// Melee: six-player free-for-all point race. Everybody is symmetric; the only
+// interaction is raiding a chosen opponent. Exists to exercise games with more
+// than two players: player targets (`Target(0)` as a player), rotating seats,
+// shared and drawn outcomes. First to 6 points wins. (resources 0=points 1=energy)
+GameDef(
+    name: "melee",
+    num_players: 6,
+    resources: [
+        (name: "points", initial: 0, min: 0, max: 15, public: true),
+        (name: "energy", initial: 0, min: 0, max: 4, public: true),
+    ],
+    attrs: [],
+    zones: [(name: "pile", per_player: false, ordered: false, vis: Public)],
+    hooks: [],
+    templates: [(name: "token", kind: 0)],
+    player_setup: [],
+    setup: NoOp,
+    phases: [
+        (name: "refresh", auto_end: true, on_enter: SetRes(Me, 1, Const(3))),
+        (name: "main"),
+    ],
+    actions: [
+        (name: "score", class: 0, phases: [1], timing: Main,
+            costs: [(1, Const(1))],
+            effect: ModRes(Me, 0, Const(1))),
+        (name: "raid", class: 1, phases: [1], timing: Main,
+            targets: [Player(Others)],
+            costs: [(1, Const(2))],
+            effect: Seq([ModRes(Target(0), 0, Const(-2)), ModRes(Me, 0, Const(1))])),
+        (name: "end_turn", class: 2, phases: [1], timing: Main, effect: EndTurn),
+    ],
+    terminal: [(cond: Cmp(Res(Me, 0), Ge, Const(6)), result: Win)],
+    timeout: ByResource(0),
+    limits: (max_turns: 90, max_steps: 4000, max_trigger_depth: 24, max_actions: 128, max_objects: 160, max_stack: 8, max_decisions: 1200),
+    meta: (family: "manual"),
+)

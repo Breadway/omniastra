@@ -17,6 +17,8 @@ struct V<'a> {
     ctx: String,
     /// Which target slots are Number targets (for `Param`).
     number_targets: Vec<bool>,
+    /// Which target slots are Player targets (for `PRef::Target`).
+    player_targets: Vec<bool>,
 }
 
 impl<'a> V<'a> {
@@ -62,6 +64,13 @@ impl<'a> V<'a> {
         match p {
             PRef::OwnerOf(o) | PRef::ControllerOf(o) => self.oref(*o, s),
             PRef::EventActor if !s.event => self.err("EventActor not in scope"),
+            PRef::Target(i) => {
+                if (*i as usize) >= s.ntargets {
+                    self.err(format!("PRef::Target({i}) not in scope"));
+                } else if !self.player_targets.get(*i as usize).copied().unwrap_or(false) {
+                    self.err(format!("PRef::Target({i}) does not refer to a Player target"));
+                }
+            }
             PRef::Seat(i) if *i >= self.g.num_players => self.err("seat out of range"),
             _ => {}
         }
@@ -309,7 +318,7 @@ impl<'a> V<'a> {
 
 /// Returns all validation errors (empty = valid).
 pub fn validate(g: &GameDef) -> Vec<String> {
-    let mut v = V { g, errs: vec![], ctx: String::new(), number_targets: vec![] };
+    let mut v = V { g, errs: vec![], ctx: String::new(), number_targets: vec![], player_targets: vec![] };
     macro_rules! limit {
         ($cond:expr, $msg:expr) => {
             if !$cond {
@@ -317,7 +326,7 @@ pub fn validate(g: &GameDef) -> Vec<String> {
             }
         };
     }
-    limit!((2..=MAX_PLAYERS as u8).contains(&g.num_players), "num_players must be 2..=4");
+    limit!((2..=MAX_PLAYERS as u8).contains(&g.num_players), format!("num_players must be 2..={}", MAX_PLAYERS));
     limit!(g.resources.len() <= MAX_RESOURCES, "too many resources");
     limit!(g.attrs.len() <= MAX_ATTRS, "too many attrs");
     limit!(g.vars.len() <= MAX_VARS, "too many vars");
@@ -414,6 +423,7 @@ pub fn validate(g: &GameDef) -> Vec<String> {
             v.err("too many targets");
         }
         v.number_targets = a.targets.iter().map(|t| matches!(t, TargetSpec::Number { .. })).collect();
+        v.player_targets = a.targets.iter().map(|t| matches!(t, TargetSpec::Player(_))).collect();
         let mut sc = Scope { source: a.source.is_some(), ..Default::default() };
         if let Some(src) = &a.source {
             for z in &src.zones {

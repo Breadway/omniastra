@@ -31,7 +31,7 @@ pub type PhaseId = u8;
 pub type ActionDefId = u16;
 
 /// Hard width limits shared by the engine and the ML tokenizer.
-pub const MAX_PLAYERS: usize = 4;
+pub const MAX_PLAYERS: usize = 6;
 pub const MAX_RESOURCES: usize = 6;
 pub const MAX_ATTRS: usize = 12;
 pub const MAX_VARS: usize = 4;
@@ -337,6 +337,10 @@ pub enum PRef {
     ControllerOf(ORef),
     /// Actor of the event being handled by a trigger.
     EventActor,
+    /// The player chosen by the action's `i`-th target, which must be a
+    /// `TargetSpec::Player`. Needed to act on one chosen player in games with
+    /// more than two players (where `Opp` is just the next seat).
+    Target(u8),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -363,6 +367,7 @@ pub enum PSel {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ZWho {
     Me,
+    /// Next player after `Me` in seat order (the opponent in 2p).
     Opp,
     Active,
     /// Owner of an object reference (e.g. `OwnerOf(Source)`).

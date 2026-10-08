@@ -189,3 +189,42 @@ fn default_cat_vocab_covers_every_categorical_id() {
     let c = ModelConfig::nano();
     assert!((omnia_observation::CAT_MAX as usize) < c.cat_vocab, "cat_vocab {} too small for ids up to {}", c.cat_vocab, omnia_observation::CAT_MAX);
 }
+
+#[test]
+fn six_player_games_batch_with_every_seat_in_the_value_loss() {
+    let dev = Default::default();
+    let path = format!("{}/../../games/melee.ron", env!("CARGO_MANIFEST_DIR"));
+    let g = Game::new(GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap()).unwrap();
+    assert_eq!(g.n() as usize, MAX_PLAYERS, "melee uses every seat");
+    // zero-sum value targets over six relative seats
+    let tk = Tokenizer::new(TokenizerConfig { max_history: 24 });
+    let mut st = State::new(&g, 5);
+    let mut rng = Rng::new(5);
+    let mut ss = vec![];
+    while !st.is_terminal() && ss.len() < 6 {
+        let p = st.decision_maker().unwrap();
+        let obs = tk.observe(&mut st, p);
+        obs.check().unwrap();
+        assert_eq!(obs.num_players, 6);
+        let na = obs.n_actions();
+        let k = rng.below(na as u64) as usize;
+        let mut pi = vec![0.0; na];
+        pi[k] = 1.0;
+        let mut winners = vec![false; 6];
+        winners[2] = true;
+        ss.push(Sample { obs, pi, value: omnia_engine::zero_sum_payoffs(&winners), game_idx: 0, family_idx: 0 });
+        st.apply(k);
+    }
+    let refs: Vec<&Sample> = ss.iter().collect();
+    let cfg = ModelConfig::tiny();
+    let h = host(&refs, &cfg);
+    // all six seats are real, so none is masked out of the value loss
+    assert!(h.vmask.iter().all(|m| *m == 1.0));
+    let m = OmniAstra::<AB>::new(&cfg, &dev);
+    let bt = Batch::<AB>::from_host(&h, &dev);
+    let out = m.forward(&bt);
+    assert_eq!(out.value.dims(), [ss.len(), MAX_PLAYERS]);
+    let l = m.losses(&bt, &out, 1.0);
+    let v: f32 = l.total.into_scalar();
+    assert!(v.is_finite());
+}
