@@ -183,3 +183,9 @@ fn model_can_overfit_a_small_mixed_game_batch() {
 
 #[allow(dead_code)]
 fn _assert_backend<T: Backend>() {}
+
+#[test]
+fn default_cat_vocab_covers_every_categorical_id() {
+    let c = ModelConfig::nano();
+    assert!((omnia_observation::CAT_MAX as usize) < c.cat_vocab, "cat_vocab {} too small for ids up to {}", c.cat_vocab, omnia_observation::CAT_MAX);
+}

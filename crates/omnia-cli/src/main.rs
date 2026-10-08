@@ -93,6 +93,7 @@ enum Cmd {
     Evaluate {
         #[arg(long)]
         checkpoint: PathBuf,
+        /// Fallback only: the model config recorded in the checkpoint's meta.json wins.
         #[arg(long, default_value = "nano")]
         model: String,
         #[arg(long)]
@@ -203,7 +204,10 @@ fn main() -> Result<()> {
             let (mut w, mut l, mut d) = (0, 0, 0);
             let mut dec = 0.0;
             for i in 0..games {
-                let mut agents = vec![agent_from(&p1, &g)?, agent_from(&p2, &g)?];
+                // Alternate seats so first-player advantage does not count as skill.
+                let swap = i % 2 == 1;
+                let mut agents = if swap { vec![agent_from(&p2, &g)?, agent_from(&p1, &g)?] } else { vec![agent_from(&p1, &g)?, agent_from(&p2, &g)?] };
+                let seat1 = swap as usize; // seat of p1 in this game
                 let s = seed + i as u64;
                 let mut st = State::new(&g, s);
                 let mut rng = Rng::new(s ^ 0x5EED);
@@ -218,6 +222,7 @@ fn main() -> Result<()> {
                     st.apply(idx);
                 }
                 let pay = st.payoffs().unwrap();
+                let (mine, theirs) = (pay[seat1], pay[1 - seat1]);
                 if trace && i == 0 {
                     println!("result: {:?} ({:?})", &pay[..g.n() as usize], st.outcome().unwrap().reason);
                     describe::state(&st);
@@ -226,15 +231,15 @@ fn main() -> Result<()> {
                     std::fs::write(path, serde_json::to_string_pretty(&rep)?)?;
                 }
                 dec += st.decisions() as f64;
-                if pay[0] > 0.0 {
+                if mine > 0.0 {
                     w += 1
-                } else if pay[1] > 0.0 {
+                } else if theirs > 0.0 {
                     l += 1
                 } else {
                     d += 1
                 }
             }
-            println!("{p1} (P1) vs {p2} (P2): {w} wins, {l} losses, {d} draws over {games} games; avg decisions {:.1}", dec / games as f64);
+            println!("{p1} vs {p2} (seats alternate; {p1} moves first in even-numbered games): {p1} {w} wins, {l} losses, {d} draws over {games} games; avg decisions {:.1}", dec / games as f64);
             Ok(())
         }
         Cmd::Simulate { game, games } => {
@@ -273,6 +278,9 @@ fn main() -> Result<()> {
                 return Err(anyhow!("game hash mismatch (replay {:016x}, game {:016x})", rep.game_hash, g.hash64));
             }
             for (i, a) in rep.actions.iter().enumerate() {
+                if st.is_terminal() || (*a as usize) >= st.legal_actions().len() {
+                    return Err(anyhow!("replay step {i}: action index {a} is not valid here ({} legal actions{}); the replay does not match this game build", st.legal_actions().len(), if st.is_terminal() { ", game already over" } else { "" }));
+                }
                 let act = st.legal_actions()[*a as usize].clone();
                 println!("{:>3}. T{} P{}: {}", i, st.turn(), act.actor, describe::action(&st, &act));
                 st.apply(*a as usize);
@@ -310,15 +318,14 @@ fn game_cmd(g: GameCmd) -> Result<()> {
         GameCmd::Inspect { path } => describe::game(&load_def(&path)?),
         GameCmd::Generate { family, variant, seed, count, out, canonical_ids, random_reward } => {
             let fam = Family::parse(&family).ok_or_else(|| anyhow!("unknown family {family}"))?;
-            let v = match variant.as_str() {
-                "alt_victory" => Variant::AltVictory,
-                "inverted" => Variant::Inverted,
-                _ => Variant::Normal,
-            };
+            let v = Variant::parse(&variant).ok_or_else(|| anyhow!("unknown variant '{variant}' (normal | alt_victory | inverted)"))?;
             if !fam.supports(v) {
                 return Err(anyhow!("family {family} has no variant {variant}"));
             }
-            let entries = generate_set(&out, fam, v, !canonical_ids, random_reward, seed, count, &ValidationConfig::default());
+            let GenerateOutcome { entries, dropped } = generate_set(&out, fam, v, !canonical_ids, random_reward, seed, count, &ValidationConfig::default()).map_err(|e| anyhow!(e))?;
+            for d in &dropped {
+                eprintln!("dropped game (seed {}): {}", d.seed, d.reason);
+            }
             std::fs::write(out.join("manifest.json"), serde_json::to_string_pretty(&GameSet { name: format!("{family}-{variant}"), games: entries.clone() })?)?;
             for e in &entries {
                 println!(
@@ -326,7 +333,7 @@ fn game_cmd(g: GameCmd) -> Result<()> {
                     e.id, e.tries, e.stats.avg_decisions, e.stats.avg_branching, e.stats.p0_win_rate, e.stats.mcts_vs_random
                 );
             }
-            println!("{} games written to {}", entries.len(), out.display());
+            println!("{} games written to {} ({} dropped: failed validation)", entries.len(), out.display(), dropped.len());
             Ok(())
         }
         GameCmd::Control { path, kind, seed, out } => {
@@ -408,7 +415,6 @@ fn benchmark(game: Option<PathBuf>, model: &str, batch: usize) -> Result<()> {
     }
     println!("observation: {:.0}/s ({:.1} tokens avg)", count as f64 / t.elapsed().as_secs_f64(), toks as f64 / count as f64);
 
-    let t = Instant::now();
     let mut mcts = Mcts::new(MctsConfig { sims: 100, ..Default::default() }, RolloutEval::new(&g.def));
     let mut st = State::new(&g, 9);
     let mut rng = Rng::new(9);

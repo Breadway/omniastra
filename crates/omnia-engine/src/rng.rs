@@ -50,7 +50,8 @@ impl Rng {
         if hi <= lo {
             return lo;
         }
-        lo + self.below((hi as i64 - lo as i64 + 1) as u64) as i32
+        // widen first: the offset may not fit an i32 when the range spans most of it
+        (lo as i64 + self.below((hi as i64 - lo as i64 + 1) as u64) as i64) as i32
     }
 
     pub fn f32(&mut self) -> f32 {

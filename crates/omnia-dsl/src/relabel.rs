@@ -4,6 +4,30 @@
 //! accidental ID alignment between generated games.
 
 use crate::ir::*;
+use std::cell::Cell;
+
+/// Number of action-class labels `Relabel::random` shuffles among themselves.
+pub const CLASS_LABELS: usize = 16;
+
+/// Which id space `Expr::EventSlot` indexes for the trigger being rewritten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotSpace {
+    None,
+    Attr,
+    Res,
+    Action,
+    Zone,
+}
+
+fn slot_space(on: EventKind) -> SlotSpace {
+    match on {
+        EventKind::AttrChanged => SlotSpace::Attr,
+        EventKind::ResourceChanged => SlotSpace::Res,
+        EventKind::ActionTaken | EventKind::StackResolved | EventKind::StackCancelled => SlotSpace::Action,
+        EventKind::Shuffled | EventKind::ZoneEmpty => SlotSpace::Zone,
+        _ => SlotSpace::None,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Relabel {
@@ -15,6 +39,8 @@ pub struct Relabel {
     pub hook: Vec<u8>,
     pub action: Vec<u16>,
     pub class: Vec<u8>,
+    /// Id space of `EventSlot` for the trigger currently being rewritten.
+    slot: Cell<SlotSpace>,
 }
 
 fn identity8(n: usize) -> Vec<u8> {
@@ -32,6 +58,7 @@ impl Relabel {
             hook: identity8(g.hooks.len()),
             action: (0..g.actions.len() as u16).collect(),
             class: identity8(256),
+            slot: Cell::new(SlotSpace::None),
         }
     }
 
@@ -51,7 +78,10 @@ impl Relabel {
         shuf(&mut r.template, &mut below);
         shuf(&mut r.hook, &mut below);
         shuf(&mut r.action, &mut below);
-        let mut c: Vec<u8> = (0..16).collect();
+        // Class labels are small categorical ids; only the first CLASS_LABELS
+        // are permuted (higher ones stay put) so the labels the model sees
+        // remain in the range it is trained on.
+        let mut c: Vec<u8> = (0..CLASS_LABELS as u8).collect();
         shuf(&mut c, &mut below);
         for (i, x) in c.into_iter().enumerate() {
             r.class[i] = x;
@@ -104,12 +134,40 @@ impl Relabel {
         }
     }
 
+    /// Remap a constant compared against `EventSlot` into the new id space.
+    fn slot_const(&self, k: i32) -> i32 {
+        let at = |m: &[u8]| m.get(k as usize).map(|x| *x as i32);
+        let mapped = if k < 0 {
+            None
+        } else {
+            match self.slot.get() {
+                SlotSpace::None => None,
+                SlotSpace::Attr => at(&self.attr),
+                SlotSpace::Res => at(&self.res),
+                SlotSpace::Zone => at(&self.zone),
+                SlotSpace::Action => self.action.get(k as usize).map(|x| *x as i32),
+            }
+        };
+        mapped.unwrap_or(k)
+    }
+
+    /// Only equality tests against a constant are permutation-safe; ordering
+    /// tests on slot ids are left untouched.
+    fn cmp(&self, a: &Expr, op: CmpOp, b: &Expr) -> Cond {
+        let eq = matches!(op, CmpOp::Eq | CmpOp::Ne);
+        match (a, b) {
+            (Expr::EventSlot, Expr::Const(k)) if eq => Cond::Cmp(Box::new(Expr::EventSlot), op, Box::new(Expr::Const(self.slot_const(*k)))),
+            (Expr::Const(k), Expr::EventSlot) if eq => Cond::Cmp(Box::new(Expr::Const(self.slot_const(*k))), op, Box::new(Expr::EventSlot)),
+            _ => Cond::Cmp(Box::new(self.expr(a)), op, Box::new(self.expr(b))),
+        }
+    }
+
     fn cond(&self, c: &Cond) -> Cond {
         match c {
             Cond::Not(a) => Cond::Not(Box::new(self.cond(a))),
             Cond::And(v) => Cond::And(v.iter().map(|x| self.cond(x)).collect()),
             Cond::Or(v) => Cond::Or(v.iter().map(|x| self.cond(x)).collect()),
-            Cond::Cmp(a, op, b) => Cond::Cmp(Box::new(self.expr(a)), *op, Box::new(self.expr(b))),
+            Cond::Cmp(a, op, b) => self.cmp(a, *op, b),
             Cond::InZone(o, z) => Cond::InZone(*o, self.z(z)),
             Cond::IsTemplate(o, t) => Cond::IsTemplate(*o, self.template[*t as usize]),
             Cond::Exists(s) => Cond::Exists(Box::new(self.sel(s))),
@@ -153,7 +211,10 @@ impl Relabel {
     }
 
     fn trigger(&self, t: &TriggerDef) -> TriggerDef {
-        TriggerDef { on: t.on, active_in: t.active_in.iter().map(|z| self.zone[*z as usize]).collect(), cond: self.cond(&t.cond), effect: self.effect(&t.effect) }
+        self.slot.set(slot_space(t.on));
+        let out = TriggerDef { on: t.on, active_in: t.active_in.iter().map(|z| self.zone[*z as usize]).collect(), cond: self.cond(&t.cond), effect: self.effect(&t.effect) };
+        self.slot.set(SlotSpace::None);
+        out
     }
 
     pub fn apply(&self, g: &GameDef) -> GameDef {
@@ -223,6 +284,7 @@ impl Relabel {
                 require: self.cond(&a.require),
                 on_use: self.effect(&a.on_use),
                 effect: self.effect(&a.effect),
+                on_cancel: self.effect(&a.on_cancel),
                 stack: a.stack,
             })
             .collect();

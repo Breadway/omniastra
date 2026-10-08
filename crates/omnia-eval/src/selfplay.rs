@@ -117,7 +117,7 @@ where
     B::Device: Send + Sync,
 {
     std::fs::create_dir_all(out_dir)?;
-    let mut log = RunLog::create(&out_dir.join("selfplay.jsonl"));
+    let mut log = RunLog::create(&out_dir.join("selfplay.jsonl"))?;
     let dev0 = devices[0].clone();
     let tcfg = TrainCfg { steps: cfg.iterations * cfg.train_steps, batch: cfg.batch, lr: cfg.lr, seed: cfg.seed, ..Default::default() };
     let mut trainer = Trainer::<B>::new(model, mcfg.clone(), tcfg, devices);
@@ -201,7 +201,7 @@ where
             "loss": last.loss, "policy_loss": last.policy, "value_loss": last.value, "league": league.len(), "counters": trainer.counters, "eval": evals,
         });
         println!("[selfplay] it {it}: +{new_samples} samples ({t_sp:.0}s), loss {:.3}, eval {}", last.loss, evals.iter().map(|e| format!("{}:{:.2}", e["opponent"].as_str().unwrap(), e["score"].as_f64().unwrap())).collect::<Vec<_>>().join(" "));
-        log.write(&row);
+        log.write(&row)?;
     }
     Ok(trainer)
 }

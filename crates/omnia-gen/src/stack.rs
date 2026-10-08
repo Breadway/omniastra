@@ -80,6 +80,8 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
     cast.source = Some(SourceSpec { zones: vec![me(HAND)], filter: Cond::IsKind(ORef::Iter, 0) });
     cast.costs = vec![(FOCUS, attr(ORef::Source, COST))];
     cast.stack = true;
+    // A countered spell must leave limbo (its effect, which would discard it, never runs).
+    cast.on_cancel = mv_one(ORef::Source, me(DISCARD), Pos::Top);
     cast.on_use = seq({
         let mut v = vec![mv_one(ORef::Source, shared(LIMBO), Pos::Bottom)];
         if alt {
@@ -94,6 +96,7 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
         ctr.costs = vec![(FOCUS, attr(ORef::Source, COST))];
         ctr.stack = true;
         ctr.on_use = mv_one(ORef::Source, shared(LIMBO), Pos::Bottom);
+        ctr.on_cancel = mv_one(ORef::Source, me(DISCARD), Pos::Top);
         actions.push(ctr);
     }
     actions.push(action("end_turn", 2, vec![1], Timing::Main, Effect::EndTurn));

@@ -24,7 +24,7 @@ impl<'a> V<'a> {
         self.errs.push(format!("{}: {}", self.ctx, m.into()));
     }
 
-    fn zref(&mut self, z: &ZRef) {
+    fn zref(&mut self, z: &ZRef, s: &Scope) {
         match self.g.zones.get(z.zone as usize) {
             None => self.err(format!("zone id {} out of range", z.zone)),
             Some(zd) => match z.who {
@@ -36,7 +36,7 @@ impl<'a> V<'a> {
             },
         }
         if let ZWho::OwnerOf(o) = z.who {
-            self.oref_ok(o, &Scope { source: true, ntargets: 3, iter_depth: 2, event: true }, false);
+            self.oref_ok(o, s, true);
         }
     }
 
@@ -72,7 +72,7 @@ impl<'a> V<'a> {
             Sel::One(o) => self.oref(*o, s),
             Sel::Zones { zones, filter, order } => {
                 for z in zones {
-                    self.zref(z);
+                    self.zref(z, s);
                 }
                 let mut s2 = *s;
                 s2.iter_depth += 1;
@@ -146,7 +146,7 @@ impl<'a> V<'a> {
             }
             Cond::InZone(o, z) => {
                 self.oref(*o, s);
-                self.zref(z);
+                self.zref(z, s);
             }
             Cond::IsTemplate(o, t) => {
                 self.oref(*o, s);
@@ -160,7 +160,7 @@ impl<'a> V<'a> {
                 self.pref(b, s);
             }
             Cond::Exists(sel) => self.sel(sel, s),
-            Cond::HasRoom(z) => self.zref(z),
+            Cond::HasRoom(z) => self.zref(z, s),
             Cond::IsActive(p) => self.pref(p, s),
             Cond::EventToZone(z) | Cond::EventFromZone(z) => {
                 if !s.event {
@@ -203,18 +203,18 @@ impl<'a> V<'a> {
             }
             Effect::Move { what, to, .. } => {
                 self.sel(what, s);
-                self.zref(to);
+                self.zref(to, s);
             }
             Effect::Create { template, to, owner } => {
                 if (*template as usize) >= self.g.templates.len() {
                     self.err("template id out of range");
                 }
-                self.zref(to);
+                self.zref(to, s);
                 self.pref(owner, s);
             }
             Effect::Copy { what, to } => {
                 self.oref(*what, s);
-                self.zref(to);
+                self.zref(to, s);
             }
             Effect::Destroy(sel) => self.sel(sel, s),
             Effect::Transform(sel, t) => {
@@ -251,7 +251,7 @@ impl<'a> V<'a> {
                 }
                 self.expr(x, s);
             }
-            Effect::Shuffle(z) => self.zref(z),
+            Effect::Shuffle(z) => self.zref(z, s),
             Effect::Reveal(sel, _) | Effect::Hide(sel) | Effect::Detach(sel) => self.sel(sel, s),
             Effect::Attach(sel, o) => {
                 self.sel(sel, s);
@@ -265,8 +265,9 @@ impl<'a> V<'a> {
             }
             Effect::Emit(_, x) => self.expr(x, s),
             Effect::Delay { effect, .. } => {
-                let mut s2 = *s;
-                s2.iter_depth = 0;
+                // A delayed effect keeps only its owner and source object: it
+                // runs later without targets, iteration bindings or an event.
+                let s2 = Scope { source: s.source, ntargets: 0, iter_depth: 0, event: false };
                 self.effect(effect, &s2);
             }
             Effect::Win(p) | Effect::Lose(p) => self.pref(p, s),
@@ -274,21 +275,31 @@ impl<'a> V<'a> {
         }
     }
 
-    /// Object targets must be visible to the actor, otherwise the action
-    /// would have to expose hidden identities.
-    fn target_visibility(&mut self, sel: &Sel) {
+    /// Objects an action names (as source or target) must be visible to the
+    /// actor, otherwise the action would have to expose hidden identities. The
+    /// active player is only the actor for `Main` actions; a `Response` can
+    /// come from any player.
+    fn zone_visible_to_actor(&mut self, z: &ZRef, timing: Timing, what: &str) {
+        if let Some(zd) = self.g.zones.get(z.zone as usize) {
+            let ok = match zd.vis {
+                Visibility::Public => true,
+                Visibility::Private => match z.who {
+                    ZWho::Me => true,
+                    ZWho::Active => timing == Timing::Main,
+                    _ => false,
+                },
+                Visibility::Hidden => false,
+            };
+            if !ok {
+                self.err(format!("{} uses zone '{}' whose contents are not visible to the actor", what, zd.name));
+            }
+        }
+    }
+
+    fn target_visibility(&mut self, sel: &Sel, timing: Timing) {
         if let Sel::Zones { zones, .. } = sel {
             for z in zones {
-                if let Some(zd) = self.g.zones.get(z.zone as usize) {
-                    let ok = match zd.vis {
-                        Visibility::Public => true,
-                        Visibility::Private => matches!(z.who, ZWho::Me | ZWho::Active),
-                        Visibility::Hidden => false,
-                    };
-                    if !ok {
-                        self.err(format!("target selector uses zone '{}' whose contents are not visible to the actor", zd.name));
-                    }
-                }
+                self.zone_visible_to_actor(z, timing, "target selector");
             }
         } else {
             self.err("object targets must use a zone selector");
@@ -371,7 +382,9 @@ pub fn validate(g: &GameDef) -> Vec<String> {
         }
         for (k, m) in t.modifiers.iter().enumerate() {
             v.ctx = format!("template {} ({}) modifier {}", ti, t.name, k);
-            v.sel(&m.affects, &hs);
+            // Modifiers are not tied to an action, so they have no targets.
+            let ms = Scope { source: true, ..Default::default() };
+            v.sel(&m.affects, &ms);
             let ds = Scope { source: true, iter_depth: 1, ..Default::default() };
             v.expr(&m.delta, &ds);
             limit!((m.attr as usize) < g.attrs.len(), "modifier attr out of range");
@@ -404,7 +417,8 @@ pub fn validate(g: &GameDef) -> Vec<String> {
         let mut sc = Scope { source: a.source.is_some(), ..Default::default() };
         if let Some(src) = &a.source {
             for z in &src.zones {
-                v.zref(z);
+                v.zref(z, &sc);
+                v.zone_visible_to_actor(z, a.timing, "source selector");
             }
             let mut s2 = sc;
             s2.iter_depth = 1;
@@ -417,7 +431,7 @@ pub fn validate(g: &GameDef) -> Vec<String> {
             st.iter_depth = 1;
             match t {
                 TargetSpec::Object(sel) => {
-                    v.target_visibility(sel);
+                    v.target_visibility(sel, a.timing);
                     v.sel(sel, &st);
                 }
                 TargetSpec::Player(_) => {}
@@ -436,9 +450,7 @@ pub fn validate(g: &GameDef) -> Vec<String> {
         v.cond(&a.require, &sc);
         v.effect(&a.on_use, &sc);
         v.effect(&a.effect, &sc);
-        if a.stack && a.timing == Timing::Response && a.source.is_none() && a.targets.is_empty() {
-            // allowed, just noting nothing to check
-        }
+        v.effect(&a.on_cancel, &sc);
     }
     v.errs
 }

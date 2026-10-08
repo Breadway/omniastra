@@ -45,7 +45,7 @@ struct Tally {
 impl Tally {
     fn expr(&mut self, e: &Expr) {
         match e {
-            Expr::Const(c) => self.consts += c.abs() as f32,
+            Expr::Const(c) => self.consts += c.unsigned_abs() as f32,
             Expr::Attr(_, a) => self.attr_read[*a as usize % MAX_ATTRS] += 1.0,
             Expr::Res(_, r) => self.res_read[*r as usize % MAX_RESOURCES] += 1.0,
             Expr::Count(s) => self.sel(s),
@@ -254,6 +254,7 @@ pub fn analyze(g: &GameDef) -> GameDescriptors {
         let mut t = Tally::default();
         t.effect(&a.effect);
         t.effect(&a.on_use);
+        t.effect(&a.on_cancel);
         t.cond(&a.require);
         for (r, x) in &a.costs {
             t.expr(x);

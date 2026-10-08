@@ -24,10 +24,15 @@ Reading the results:
   (pretraining + fine-tuning FLOP estimates) — they answer different questions. `scratch_x3_steps`
   controls optimizer updates on H, not pretraining compute; read the table's compute column.
 
-Metrics: held-out policy cross-entropy / top-1 agreement with the expert (MCTS) policy on the
-target game (low variance), value MSE, and playing strength of the raw greedy policy against a
-fixed opponent panel (random, MCTS-N) with Wilson CIs per match. The checkpoint is selected by
-validation CE on held-out *games* of H. `summary.md` also reports a log-interpolated **effective-
+Metrics: policy cross-entropy / top-1 agreement with the expert (MCTS) policy on the target
+game (low variance), value MSE, and playing strength of the raw greedy policy against a
+fixed opponent panel (random, MCTS-N) with Wilson CIs per match. H is held out of pretraining;
+its validation data are fresh episodes of H (new seeds), not different games. The checkpoint is
+selected by CE on one such split (`select_ce`; the untrained step-0 model is never a candidate
+when there is training) and the reported `val_ce`, top-1 and value MSE are measured for that
+checkpoint on a second, disjoint split of fresh episodes, so the report is not biased by the
+selection. Summary rows group runs by the *requested* budget (`budget_requested`), never by
+the clipped size. `summary.md` also reports a log-interpolated **effective-
 data multiplier** (how many scratch positions the arm needs to match its CE).
 
 ## Discipline

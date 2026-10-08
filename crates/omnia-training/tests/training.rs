@@ -165,12 +165,40 @@ fn frozen_backbone_does_not_change_but_adapter_does() {
     let dev: <AB as burn::tensor::backend::BackendTypes>::Device = Default::default();
     let m = OmniAstra::<AB>::new(&nano(), &dev).freeze_backbone();
     let before_blocks: Vec<f32> = m.blocks[0].clone().into_record_debug();
+    let before_bias = bias_fingerprint(&m);
     let mut t = Trainer::<AB>::new(m, nano(), TrainCfg { lr: 1e-2, ..Default::default() }, vec![dev]);
     for _ in 0..3 {
         t.train_step(&refs);
     }
     let after_blocks: Vec<f32> = t.model.blocks[0].clone().into_record_debug();
     assert_eq!(before_blocks, after_blocks, "frozen backbone changed");
+    assert_eq!(before_bias, bias_fingerprint(&t.model), "frozen backbone's bias tables changed");
+}
+
+/// Output of every attention-bias table on a fixed id sweep.
+fn bias_fingerprint<B: Backend>(m: &OmniAstra<B>) -> Vec<f32> {
+    use burn::tensor::{Int, Tensor};
+    let dev = m.reg.val().device();
+    let ids = |n: usize| Tensor::<B, 1, Int>::arange(0..n as i64, &dev).reshape([1, 1, n]);
+    let mut out = vec![];
+    for (t, n) in [(&m.rel_tab, omnia_observation::rel::VOCAB), (&m.tb_tab, TB_VOCAB), (&m.rel_as_tab, omnia_observation::rel::VOCAB)] {
+        let t = t.as_ref().expect("nano config has all bias tables");
+        out.extend(t.forward(ids(n)).into_data().to_vec::<f32>().unwrap());
+    }
+    out
+}
+
+#[test]
+fn transplant_backbone_copies_bias_tables() {
+    let _g = RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dev: <IB as burn::tensor::backend::BackendTypes>::Device = Default::default();
+    IB::seed(&dev, 1);
+    let src = OmniAstra::<IB>::new(&nano(), &dev);
+    IB::seed(&dev, 2);
+    let fresh = OmniAstra::<IB>::new(&nano(), &dev);
+    assert_ne!(bias_fingerprint(&src), bias_fingerprint(&fresh), "tables must differ before transplant");
+    let moved = transplant_backbone(&src, fresh, false);
+    assert_eq!(bias_fingerprint(&src), bias_fingerprint(&moved));
 }
 
 trait Debug1 {
@@ -213,4 +241,31 @@ fn model_moved_from_inference_to_autodiff_trains_after_enable_grad() {
         let changed = before != probe(&t.model);
         assert_eq!(changed, expect_change, "enable_grad={enable}");
     }
+}
+
+#[test]
+fn run_log_surfaces_open_failures_and_writes_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    // writes land in the file
+    let path = dir.path().join("sub/log.jsonl");
+    let mut log = RunLog::create(&path).unwrap();
+    log.write(&serde_json::json!({"a": 1})).unwrap();
+    log.write(&serde_json::json!({"a": 2})).unwrap();
+    drop(log);
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    // an unopenable path is an error, not a silent no-op log
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "x").unwrap();
+    assert!(RunLog::create(&blocker.join("log.jsonl")).is_err());
+}
+
+#[test]
+fn empty_batch_is_a_no_op_not_a_panic() {
+    let dev: <AB as burn::tensor::backend::BackendTypes>::Device = Default::default();
+    let m = OmniAstra::<AB>::new(&nano(), &dev);
+    let mut t = Trainer::<AB>::new(m, nano(), TrainCfg::default(), vec![dev]);
+    let stats = t.train_step(&[]);
+    assert_eq!(stats.loss, 0.0);
+    assert_eq!(t.counters.optimizer_updates, 0);
+    assert_eq!(t.counters.positions, 0);
 }

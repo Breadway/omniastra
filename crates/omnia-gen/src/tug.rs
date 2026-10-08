@@ -1,7 +1,10 @@
 //! Family "tug": shared tug-of-war track pushed from opposite sides.
 //! Strategic structure: spend energy to push vs anchor to protect progress;
-//! shared global state with opposite-signed objectives; hidden hands; optional
-//! stochastic pushes.
+//! zero-sum opposed objectives; hidden hands; optional stochastic pushes.
+//!
+//! The track is stored seat-relatively: every player has a `lead` resource and
+//! the two always sum to zero, so "push" always means "raise my lead" and the
+//! model never has to infer an absolute seat from turn parity.
 
 use crate::build::*;
 use crate::Variant;
@@ -12,11 +15,15 @@ const DECK: u8 = 0;
 const HAND: u8 = 1;
 const DISCARD: u8 = 2;
 const ENERGY: u8 = 0;
-const TRACK: u8 = 0;
+const LEAD: u8 = 1;
 const COST: u8 = 0;
 
-fn sign() -> Expr {
-    Expr::IfElse(Box::new(cmp(Expr::Seat(PRef::Me), CmpOp::Eq, c(0))), Box::new(c(1)), Box::new(c(-1)))
+/// Change my lead by `delta` (evaluated once) and mirror it on the opponent.
+fn shift(delta: Expr) -> Effect {
+    seq(vec![
+        Effect::ModRes(PRef::Me, LEAD, delta),
+        Effect::SetRes(PRef::Opp, LEAD, Expr::Neg(Box::new(res(PRef::Me, LEAD)))),
+    ])
 }
 
 pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
@@ -37,14 +44,14 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
         let base = ((cost as f32) * ratio).round() as i32;
         let p = if inverted { (5 - base).max(1) } else { base.max(1) };
         let mut t = template(&format!("push{}", cost), 0, vec![(COST, cost)]);
-        t.hooks.push((0, Effect::ModVar(TRACK, Expr::Mul(Box::new(sign()), Box::new(c(p))))));
+        t.hooks.push((0, shift(c(p))));
         templates.push(t);
         counts.push(range(rng, 3, 6) as u16);
     }
     if stochastic {
         let cost = range(rng, 2, 3);
         let mut t = template("gamble", 0, vec![(COST, cost)]);
-        t.hooks.push((0, Effect::ModVar(TRACK, Expr::Mul(Box::new(sign()), Box::new(Expr::Rand(0, cost + 2))))));
+        t.hooks.push((0, shift(Expr::Rand(0, cost + 2))));
         templates.push(t);
         counts.push(range(rng, 2, 4) as u16);
     }
@@ -54,11 +61,11 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
         let cost = range(rng, 1, 2);
         let mut t = template("anchor", 0, vec![(COST, cost)]);
         let toward = Expr::IfElse(
-            Box::new(cmp(Expr::Var(TRACK), CmpOp::Gt, c(0))),
+            Box::new(cmp(res(PRef::Me, LEAD), CmpOp::Gt, c(0))),
             Box::new(c(-q)),
-            Box::new(Expr::IfElse(Box::new(cmp(Expr::Var(TRACK), CmpOp::Lt, c(0))), Box::new(c(q)), Box::new(c(0)))),
+            Box::new(Expr::IfElse(Box::new(cmp(res(PRef::Me, LEAD), CmpOp::Lt, c(0))), Box::new(c(q)), Box::new(c(0)))),
         );
-        t.hooks.push((0, Effect::ModVar(TRACK, toward)));
+        t.hooks.push((0, shift(toward)));
         templates.push(t);
         counts.push(range(rng, 2, 4) as u16);
     }
@@ -76,17 +83,14 @@ pub fn generate(rng: &mut Rng, variant: Variant) -> GameDef {
     play.costs = vec![(ENERGY, attr(ORef::Source, COST))];
     let actions = vec![play, action("end_turn", 1, vec![1], Timing::Main, Effect::EndTurn)];
 
-    let terminal = vec![
-        TerminalRule { cond: and(vec![cmp(Expr::Seat(PRef::Me), CmpOp::Eq, c(0)), cmp(Expr::Var(TRACK), CmpOp::Ge, c(t_win))]), result: PlayerResult::Win },
-        TerminalRule { cond: and(vec![cmp(Expr::Seat(PRef::Me), CmpOp::Eq, c(1)), cmp(Expr::Var(TRACK), CmpOp::Le, c(-t_win))]), result: PlayerResult::Win },
-    ];
+    let terminal = vec![TerminalRule { cond: cmp(res(PRef::Me, LEAD), CmpOp::Ge, c(t_win)), result: PlayerResult::Win }];
 
     GameDef {
         name: "tug".into(),
         num_players: 2,
-        resources: vec![resource("energy", 0, 0, 9)],
+        resources: vec![resource("energy", 0, 0, 9), resource("lead", 0, -30, 30)],
         attrs: vec![attr_def("cost", 0, 0, 6)],
-        vars: vec![VarDef { name: "track".into(), initial: 0 }],
+        vars: vec![],
         zones: vec![
             zone("deck", true, true, Visibility::Hidden, None),
             zone("hand", true, false, Visibility::Private, Some(hand_cap)),

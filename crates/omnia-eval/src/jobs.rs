@@ -89,7 +89,7 @@ where
     let tcfg = TrainCfg { steps: job.train.steps, batch: job.train.batch, lr: job.train.lr, seed: job.seed, ..Default::default() };
     let mut tr = Trainer::<B>::new(model, mcfg.clone(), tcfg.clone(), devices);
     let mut sampler = MixSampler::new(&pools, &job.train.mix, job.seed);
-    let mut log = RunLog::create(&out.join("train.jsonl"));
+    let mut log = RunLog::create(&out.join("train.jsonl"))?;
     let val_refs: Vec<&Sample> = val.iter().collect();
     let t = Instant::now();
     for step in 1..=tcfg.steps {
@@ -97,11 +97,11 @@ where
         if step % job.eval_every.max(1) == 0 || step == tcfg.steps {
             let ev = evaluate_dataset::<B::InnerBackend>(&tr.valid(), &mcfg, &val_refs, 64, &dev0);
             println!("[{}] step {step}/{} loss {:.3} | val CE {:.3} top1 {:.3} vMSE {:.3} | {:.0}s", job.name, tcfg.steps, s.loss, ev.overall.policy_ce, ev.overall.top1, ev.overall.value_mse, t.elapsed().as_secs_f32());
-            log.write(&serde_json::json!({"step": step, "train": s, "val": ev, "counters": tr.counters}));
+            log.write(&serde_json::json!({"step": step, "train": s, "val": ev, "counters": tr.counters}))?;
         }
     }
     let games_meta: Vec<_> = instances.iter().map(|i| serde_json::json!({"id": i.id, "hash": i.def.hash_hex(), "game_idx": i.game_idx})).collect();
-    save(&out.join("checkpoint"), &tr, serde_json::json!({"games": games_meta, "mix": job.train.mix, "seed": job.seed, "model": job.model}))?;
+    save(&out.join("checkpoint"), &tr, serde_json::json!({"games": games_meta, "mix": job.train.mix, "seed": job.seed, "model": job.model, "max_history": job.data.max_history}))?;
     println!("[{}] saved {}", job.name, out.join("checkpoint").display());
     Ok(())
 }
@@ -151,19 +151,45 @@ where
     let games: Vec<SelfPlayGame> = instances.iter().map(|i| SelfPlayGame { game: i.game.clone(), game_idx: i.game_idx, family_idx: i.family_idx }).collect();
     let out = PathBuf::from(&job.out_dir);
     let trainer = selfplay::run::<B>(&games, model, &mcfg, &job.cfg, devices, &out)?;
-    save(&out.join("checkpoint"), &trainer, serde_json::json!({"job": job.name}))?;
+    save(&out.join("checkpoint"), &trainer, serde_json::json!({"job": job.name, "max_history": job.cfg.max_history}))?;
     Ok(())
 }
 
-/// Evaluate a saved checkpoint's raw policy against a panel on a game.
+/// Observation history length used when a checkpoint's metadata does not record one.
+const LEGACY_MAX_HISTORY: usize = 16;
+
+/// Model config and observation history a checkpoint was trained with, read
+/// from its `meta.json`. Checkpoints written before the history length was
+/// recorded fall back to `model` / `overrides` and [`LEGACY_MAX_HISTORY`].
+pub fn checkpoint_settings(checkpoint: &Path, model: &str, overrides: &Option<serde_json::Value>) -> Result<(ModelConfig, usize)> {
+    let meta: Option<serde_json::Value> = std::fs::read_to_string(checkpoint.join("meta.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let mcfg = match meta.as_ref().and_then(|m| m.get("model_cfg")).and_then(|c| c.as_str()) {
+        Some(c) => serde_json::from_str(c).map_err(|e| anyhow!("{}: bad model_cfg in meta.json: {e}", checkpoint.display()))?,
+        None => {
+            eprintln!("warning: {} has no model config in meta.json; building '{model}' with 64 game slots", checkpoint.display());
+            model_cfg(model, overrides, 64)?
+        }
+    };
+    let max_history = match meta.as_ref().and_then(|m| m.pointer("/notes/max_history")).and_then(|h| h.as_u64()) {
+        Some(h) => h as usize,
+        None => {
+            eprintln!("warning: {} does not record max_history; assuming {LEGACY_MAX_HISTORY}", checkpoint.display());
+            LEGACY_MAX_HISTORY
+        }
+    };
+    Ok((mcfg, max_history))
+}
+
+/// Evaluate a saved checkpoint's raw policy against a panel on a game, using
+/// the model config and history length the checkpoint was trained with.
 pub fn eval_checkpoint<B: AutodiffBackend>(checkpoint: &Path, model: &str, overrides: &Option<serde_json::Value>, game: Arc<omnia_engine::Game>, game_idx: u32, opponents: &[String], games: u32, device: B::Device) -> Result<Vec<MatchResult>>
 where
     OmniAstra<B::InnerBackend>: Send + Sync,
     B::Device: Send,
 {
-    let mcfg = model_cfg(model, overrides, 64)?;
+    let (mcfg, max_history) = checkpoint_settings(checkpoint, model, overrides)?;
     let m = load_weights::<B::InnerBackend>(checkpoint, &mcfg, &device)?;
-    let net = NetHandle { model: Arc::new(m), cfg: Arc::new(mcfg), dev: device, game_idx, max_history: 16 };
+    let net = NetHandle { model: Arc::new(m), cfg: Arc::new(mcfg), dev: device, game_idx, max_history };
     let mut out = vec![];
     for o in opponents {
         let fac = if o == "random" {
@@ -230,4 +256,34 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_meta(dir: &Path, meta: serde_json::Value) {
+        std::fs::write(dir.join("meta.json"), meta.to_string()).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_settings_come_from_meta_not_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let trained = ModelConfig::nano().with_n_games(23);
+        write_meta(dir.path(), serde_json::json!({"model_cfg": serde_json::to_string(&trained).unwrap(), "notes": {"max_history": 40}}));
+        // the caller's model name and overrides must not win over what was trained
+        let (cfg, hist) = checkpoint_settings(dir.path(), "small", &Some(serde_json::json!({"d_model": 8}))).unwrap();
+        assert_eq!(hist, 40);
+        assert_eq!(cfg.n_games, 23);
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), serde_json::to_value(&trained).unwrap());
+    }
+
+    #[test]
+    fn legacy_checkpoints_fall_back_with_a_default_history() {
+        let dir = tempfile::tempdir().unwrap();
+        write_meta(dir.path(), serde_json::json!({"notes": {}}));
+        let (cfg, hist) = checkpoint_settings(dir.path(), "nano", &None).unwrap();
+        assert_eq!(hist, LEGACY_MAX_HISTORY);
+        assert_eq!(cfg.n_games, 64);
+    }
 }

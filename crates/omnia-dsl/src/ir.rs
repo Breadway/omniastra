@@ -5,11 +5,21 @@
 //! here (or anywhere in the generic runtime) knows about a specific game.
 //!
 //! The effect language is deliberately *not* Turing-complete: loops are
-//! bounded (`ForEach` ranges over finite selections, `Repeat` is capped by
-//! [`Limits`]), there are no user-defined functions or recursion, and every
-//! resolution runs under a step budget.
+//! bounded (`ForEach` ranges over finite selections, `Repeat` runs at most
+//! [`MAX_REPEAT`] iterations), there are no user-defined functions or
+//! recursion, and every resolution runs under the [`Limits::max_steps`]
+//! budget (each loop iteration and each per-object effect spends one step).
+//!
+//! Not every effect is observable: `Transform`, `SetController`, `Hide`,
+//! `Detach`, `SetVar` and `ModVar` change the state but emit no event, so
+//! triggers cannot react to them and they do not appear in the history.
+//! Resource, attribute and zone changes, reveals, attachments, shuffles,
+//! creation and destruction do emit events.
 
 use serde::{Deserialize, Serialize};
+
+/// Most iterations a single `Repeat` effect performs.
+pub const MAX_REPEAT: i32 = 64;
 
 pub type ResId = u8;
 pub type AttrId = u8;
@@ -188,6 +198,11 @@ pub struct ActionDef {
     #[serde(default = "Effect::noop")]
     pub on_use: Effect,
     pub effect: Effect,
+    /// Runs instead of `effect` when a stacked action is countered
+    /// (`CancelStack`) or its source has vanished, with the same `Source` /
+    /// `Target(i)` bindings. Typically moves the source out of limbo.
+    #[serde(default = "Effect::noop")]
+    pub on_cancel: Effect,
     /// Goes on the stack and opens a response window.
     #[serde(default)]
     pub stack: bool,

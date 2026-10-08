@@ -34,6 +34,18 @@ pub enum Variant {
     Inverted,
 }
 
+impl Variant {
+    /// Strict parse of a variant name; unknown names are not silently `Normal`.
+    pub fn parse(s: &str) -> Option<Variant> {
+        match s {
+            "normal" => Some(Variant::Normal),
+            "alt_victory" | "altvictory" => Some(Variant::AltVictory),
+            "inverted" => Some(Variant::Inverted),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Family {
     Tempo,
@@ -92,6 +104,7 @@ impl GenSpec {
 }
 
 pub fn generate(spec: &GenSpec) -> GameDef {
+    assert!(spec.family.supports(spec.variant), "family {} has no variant {:?}; check Family::supports first", spec.family.name(), spec.variant);
     let salt = match spec.family {
         Family::Tempo => 0x11,
         Family::Engine => 0x22,
@@ -169,6 +182,8 @@ pub struct ValidationConfig {
     pub mcts_sims: u32,
     pub min_decisions: f32,
     pub max_timeout_rate: f32,
+    /// Fraction of random games allowed to end in an engine fault (0 = none).
+    pub max_fault_rate: f32,
     pub min_side_win_rate: f32,
     pub min_skill: f32,
     pub check_skill: bool,
@@ -176,7 +191,7 @@ pub struct ValidationConfig {
 
 impl Default for ValidationConfig {
     fn default() -> Self {
-        ValidationConfig { random_games: 60, skill_games: 10, mcts_sims: 24, min_decisions: 8.0, max_timeout_rate: 0.3, min_side_win_rate: 0.15, min_skill: 0.6, check_skill: true }
+        ValidationConfig { random_games: 60, skill_games: 10, mcts_sims: 24, min_decisions: 8.0, max_timeout_rate: 0.3, max_fault_rate: 0.0, min_side_win_rate: 0.15, min_skill: 0.6, check_skill: true }
     }
 }
 
@@ -190,6 +205,7 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
     let mut st_ = GameStats { random_games: cfg.random_games, ..Default::default() };
     let (mut dec, mut branch, mut nb) = (0.0f64, 0.0f64, 0.0f64);
     let (mut w0, mut w1, mut dr, mut to, mut fa) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut first_fault = None;
     for seed in 0..cfg.random_games as u64 {
         let mut rng = Rng::new(seed ^ 0xBEEF);
         let mut st = State::new(&game, 1000 + seed);
@@ -206,9 +222,7 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
         match o.reason {
             omnia_engine::EndReason::Fault(f) => {
                 fa += 1;
-                if fa > 0 {
-                    return Err(format!("engine fault {:?}", f));
-                }
+                first_fault.get_or_insert(f);
             }
             omnia_engine::EndReason::Timeout => to += 1,
             _ => {}
@@ -230,6 +244,9 @@ pub fn measure(def: &GameDef, cfg: &ValidationConfig) -> Result<GameStats, Strin
     st_.draw_rate = dr as f32 / n;
     st_.timeout_rate = to as f32 / n;
     st_.fault_rate = fa as f32 / n;
+    if st_.fault_rate > cfg.max_fault_rate {
+        return Err(format!("engine faults in {fa}/{} random games (first: {:?})", cfg.random_games, first_fault.unwrap()));
+    }
 
     if st_.avg_decisions < cfg.min_decisions {
         return Err(format!("games too short (avg {:.1} decisions)", st_.avg_decisions));
@@ -309,24 +326,51 @@ pub struct GameSet {
     pub games: Vec<GameEntry>,
 }
 
+/// A requested game that could not be generated (it failed validation).
+#[derive(Clone, Debug)]
+pub struct DroppedGame {
+    pub seed: u64,
+    pub reason: String,
+}
+
+/// Result of [`generate_set`]: written games plus the ones that were dropped.
+#[derive(Clone, Debug, Default)]
+pub struct GenerateOutcome {
+    pub entries: Vec<GameEntry>,
+    pub dropped: Vec<DroppedGame>,
+}
+
 /// Generate `count` valid games of a family into `dir` (RON files) and return
-/// manifest entries. Deterministic given `base_seed`.
-pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, relabel: bool, random_reward_flag: bool, base_seed: u64, count: usize, cfg: &ValidationConfig) -> Vec<GameEntry> {
-    std::fs::create_dir_all(dir).expect("create dir");
+/// manifest entries plus the games that failed validation. Deterministic given
+/// `base_seed`. I/O failures are errors.
+pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, relabel: bool, random_reward_flag: bool, base_seed: u64, count: usize, cfg: &ValidationConfig) -> Result<GenerateOutcome, String> {
+    if !family.supports(variant) {
+        return Err(format!("family {} has no variant {:?}", family.name(), variant));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let results: Vec<_> = (0..count)
         .into_par_iter()
-        .filter_map(|i| {
+        .map(|i| {
             let spec = GenSpec { family, seed: base_seed + i as u64 * 7919, variant, relabel, random_reward: false };
             // Validate the honest game first; the random-reward control is derived from it.
-            let (s, def, stats, tries) = generate_valid(&spec, cfg, 40).ok()?;
-            let def = if random_reward_flag { random_reward(&def) } else { def };
-            Some((s, def, stats, tries))
+            generate_valid(&spec, cfg, 40).map(|(s, def, stats, tries)| {
+                let def = if random_reward_flag { random_reward(&def) } else { def };
+                (s, def, stats, tries)
+            }).map_err(|reason| DroppedGame { seed: spec.seed, reason: reason.to_string() })
         })
         .collect();
     let mut entries = vec![];
-    for (s, def, stats, tries) in results {
+    let mut dropped = vec![];
+    for r in results {
+        let (s, def, stats, tries) = match r {
+            Ok(x) => x,
+            Err(d) => {
+                dropped.push(d);
+                continue;
+            }
+        };
         let path = dir.join(format!("{}.ron", def.name));
-        std::fs::write(&path, def.to_ron()).expect("write game");
+        std::fs::write(&path, def.to_ron()).map_err(|e| format!("{}: {e}", path.display()))?;
         entries.push(GameEntry {
             id: def.name.clone(),
             family: family.name().into(),
@@ -342,7 +386,7 @@ pub fn generate_set(dir: &std::path::Path, family: Family, variant: Variant, rel
         });
     }
     entries.sort_by(|a, b| a.id.cmp(&b.id));
-    entries
+    Ok(GenerateOutcome { entries, dropped })
 }
 
 pub fn load_game(path: &std::path::Path) -> Result<Arc<Game>, String> {

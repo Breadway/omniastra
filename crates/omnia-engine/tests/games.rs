@@ -1,4 +1,4 @@
-use omnia_dsl::GameDef;
+use omnia_dsl::{GameDef, SetupEntry, Visibility};
 use omnia_engine::*;
 use std::sync::Arc;
 
@@ -62,21 +62,30 @@ fn clone_then_diverge_is_independent_and_matches_replay() {
         let g = load(name);
         let mut st = State::new(&g, 7);
         let mut rng = Rng::new(1);
+        let mut rep = Replay::new(&g, 7);
         for _ in 0..6 {
             if st.is_terminal() {
                 break;
             }
             let n = st.legal_actions().len();
-            st.apply(rng.below(n as u64) as usize);
+            let i = rng.below(n as u64) as usize;
+            rep.actions.push(i as u32);
+            st.apply(i);
         }
         if st.is_terminal() {
             continue;
         }
         let h0 = st.state_hash();
+        // replaying the recorded prefix reaches exactly the same state
+        assert_eq!(rep.replay(&g).unwrap().state_hash(), h0, "{name}: replay does not reproduce the played prefix");
         let mut c = st.clone();
         let n = c.legal_actions().len();
         c.apply(0.min(n - 1));
         assert_eq!(st.state_hash(), h0, "{name}: original mutated by clone step");
+        // a clone stepped the same way as a replay of (prefix + that action) agrees
+        let mut rep2 = rep.clone();
+        rep2.actions.push(0.min(n - 1) as u32);
+        assert_eq!(rep2.replay(&g).unwrap().state_hash(), c.state_hash(), "{name}: clone diverged from replay");
         // every action leads to a state without panicking
         for i in 0..st.legal_actions().len() {
             let mut c = st.clone();
@@ -151,10 +160,10 @@ fn stack_and_counters_work_in_gambit() {
 #[test]
 fn relabelled_games_are_mechanically_equivalent() {
     use omnia_dsl::Relabel;
-    for name in GAMES {
+    for (name, relabel_seed) in GAMES.iter().flat_map(|n| [77u64, 1, 2, 3, 4, 5].map(|s| (*n, s))) {
         let path = format!("{}/../../games/{}.ron", env!("CARGO_MANIFEST_DIR"), name);
         let def = GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let mut rr = Rng::new(77);
+        let mut rr = Rng::new(relabel_seed);
         let rl = Relabel::random(&def, |n| rr.below(n));
         let def2 = rl.apply(&def);
         def2.check().unwrap_or_else(|e| panic!("{name}: relabelled game invalid: {e}"));
@@ -177,4 +186,228 @@ fn relabelled_games_are_mechanically_equivalent() {
         assert!((a.0 - b.0).abs() < 0.1, "{name}: win rate differs {a:?} vs {b:?}");
         assert!((a.1 - b.1).abs() / a.1 < 0.1, "{name}: length differs {a:?} vs {b:?}");
     }
+}
+
+/// `EventSlot` constants must follow the id permutation, otherwise the
+/// skirmish death trigger watches the wrong attribute after relabelling.
+#[test]
+fn relabel_remaps_event_slot_constants() {
+    use omnia_dsl::{CmpOp, Cond, Expr, Relabel};
+    let path = format!("{}/../../games/skirmish.ron", env!("CARGO_MANIFEST_DIR"));
+    let def = GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for seed in 0..32u64 {
+        let mut rr = Rng::new(seed);
+        let rl = Relabel::random(&def, |n| rr.below(n));
+        let def2 = rl.apply(&def);
+        let Cond::And(parts) = &def2.triggers[0].cond else { panic!("unexpected trigger shape") };
+        let Cond::Cmp(a, CmpOp::Eq, b) = &parts[0] else { panic!("unexpected slot test") };
+        assert_eq!(**a, Expr::EventSlot);
+        assert_eq!(**b, Expr::Const(rl.attr[2] as i32), "seed {seed}");
+        let Cond::Cmp(lhs, CmpOp::Le, _) = &parts[1] else { panic!("unexpected health test") };
+        assert!(matches!(**lhs, Expr::Attr(_, id) if id == rl.attr[2]), "seed {seed}");
+    }
+}
+
+fn load_def(name: &str) -> GameDef {
+    let path = format!("{}/../../games/{}.ron", env!("CARGO_MANIFEST_DIR"), name);
+    GameDef::from_ron(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn shared_objects_are_unowned_until_claimed() {
+    use omnia_engine::view::NO_REL;
+    let g = load("merchant");
+    let (mut saw_unowned, mut saw_claimed) = (false, false);
+    for seed in 0..30 {
+        let mut st = State::new(&g, seed);
+        let mut rng = Rng::new(seed + 7);
+        while !st.is_terminal() {
+            let p = st.decision_maker().unwrap();
+            let v = st.view(p);
+            for o in &v.objects {
+                let zone = &v.zones[o.zone as usize];
+                if zone.owner_rel == NO_REL {
+                    // still in a shared zone: nobody owns or controls it (unless it came from a player)
+                    saw_unowned |= o.owner_rel == NO_REL && o.controller_rel == NO_REL;
+                } else {
+                    // a player's zone: the object is owned by someone
+                    assert_ne!(o.owner_rel, NO_REL, "seed {seed}: object in a player zone has no owner");
+                    saw_claimed = true;
+                }
+            }
+            let n = st.legal_actions().len();
+            st.apply(rng.below(n as u64) as usize);
+        }
+    }
+    assert!(saw_unowned && saw_claimed);
+}
+
+#[test]
+fn market_view_is_symmetric_between_seats() {
+    use omnia_engine::view::NO_REL;
+    let g = load("merchant");
+    let mut st = State::new(&g, 3);
+    for p in 0..2 {
+        let v = st.view(p);
+        let market = v.zones.iter().position(|z| z.def == 0).unwrap();
+        assert_eq!(v.zones[market].owner_rel, NO_REL);
+        let in_market: Vec<_> = v.objects.iter().filter(|o| o.zone as usize == market).collect();
+        assert!(!in_market.is_empty());
+        assert!(in_market.iter().all(|o| o.owner_rel == NO_REL && o.controller_rel == NO_REL), "seat {p} sees the market owned");
+    }
+}
+
+#[test]
+fn determinize_does_not_mix_shared_hidden_cards_with_hands() {
+    // gambit with a hidden shared zone holding only `counter` (template 4)
+    let mut def = load_def("gambit");
+    def.zones[3].vis = Visibility::Hidden;
+    def.shared_setup.push(SetupEntry { zone: 3, template: 4, count: 3 });
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 1);
+    let shared = g.zone_base[3] as usize;
+    assert_eq!(st.zone_contents(shared).len(), 3);
+    let mut rng = Rng::new(5);
+    for _ in 0..40 {
+        let d = st.determinize(0, &mut rng);
+        for o in d.zone_contents(shared) {
+            assert_eq!(d.object(*o).template, 4, "a shared hidden card took a player's identity");
+        }
+    }
+}
+
+#[test]
+fn determinize_respects_zone_constraints_without_falling_back_to_truth() {
+    // Opponent hands may only hold kind-0 cards, decks hold both kinds. Naive
+    // shuffles almost never satisfy that, so a fallback would keep the truth.
+    let mut def = load_def("gambit");
+    def.zones[1].allowed_kinds = Some(vec![0]);
+    // make kind-1 cards plentiful so a random shuffle rarely satisfies the hand constraint
+    def.player_setup[4].count = 40;
+    def.player_setup.push(SetupEntry { zone: 1, template: 0, count: 6 });
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 2);
+    let (opp_hand, opp_deck) = (g.zone_base[1] as usize + 1, g.zone_base[0] as usize + 1);
+    let truth = |s: &State, z: usize| -> Vec<u16> { s.zone_contents(z).iter().map(|o| s.object(*o).template).collect() };
+    let mut rng = Rng::new(11);
+    let mut changed = 0;
+    for _ in 0..20 {
+        let d = st.determinize(0, &mut rng);
+        for o in d.zone_contents(opp_hand) {
+            let t = d.object(*o).template as usize;
+            assert_eq!(g.def.templates[t].kind, 0, "constraint violated");
+        }
+        if truth(&d, opp_hand) != truth(&st, opp_hand) || truth(&d, opp_deck) != truth(&st, opp_deck) {
+            changed += 1;
+        }
+    }
+    assert!(changed >= 10, "determinize kept the true identities in {} of 20 samples", 20 - changed);
+}
+
+/// A spell sits in limbo only while it is on the stack. Countering it must not
+/// strand it there (its normal effect, which discards it, never runs).
+#[test]
+fn countered_spells_leave_limbo() {
+    let g = load("gambit");
+    let limbo = g.zone_base[3] as usize;
+    let mut saw_cancel = false;
+    for seed in 0..300 {
+        let mut st = State::new(&g, seed);
+        let mut rng = Rng::new(seed + 1);
+        while !st.is_terminal() {
+            if st.stack_len() == 0 {
+                assert!(st.zone_contents(limbo).is_empty(), "seed {seed} turn {}: {} card(s) stuck in limbo", st.turn(), st.zone_contents(limbo).len());
+            }
+            let n = st.legal_actions().len();
+            st.apply(rng.below(n as u64) as usize);
+        }
+        saw_cancel |= st.history().iter().any(|e| matches!(e.kind, omnia_dsl::EventKind::StackCancelled));
+    }
+    assert!(saw_cancel, "no counter ever cancelled a spell");
+}
+
+#[test]
+fn costs_are_checked_cumulatively() {
+    use omnia_dsl::Expr;
+    let castable = |costs: Vec<(u8, Expr)>| {
+        let mut def = load_def("gambit");
+        def.actions[0].costs = costs;
+        let g = Game::new(def).unwrap();
+        // focus is 3 on turn 1, cast is the action with def 0
+        (0..30).any(|seed| State::new(&g, seed).legal_actions().iter().any(|a| a.def == 0))
+    };
+    assert!(castable(vec![(1, Expr::Const(2))]), "a single cost of 2 fits in 3 focus");
+    assert!(!castable(vec![(1, Expr::Const(2)), (1, Expr::Const(2))]), "two costs of 2 on the same resource need 4 focus");
+}
+
+#[test]
+fn extreme_arithmetic_does_not_panic() {
+    use omnia_dsl::{Effect, Expr, PRef};
+    let mut def = load_def("gambit");
+    let b = |e: Expr| Box::new(e);
+    def.actions[2].effect = Effect::Seq(vec![
+        Effect::ModRes(PRef::Me, 0, Expr::Neg(b(Expr::Const(i32::MIN)))),
+        Effect::ModRes(PRef::Me, 0, Expr::Div(b(Expr::Const(i32::MIN)), b(Expr::Const(-1)))),
+        Effect::ModRes(PRef::Me, 0, Expr::Rand(i32::MIN, i32::MAX)),
+        Effect::EndTurn,
+    ]);
+    let g = Game::new(def).unwrap();
+    let mut st = State::new(&g, 1);
+    let end = st.legal_actions().iter().position(|a| a.def == 2).unwrap();
+    st.apply(end); // must not panic on i32::MIN negation / division / full-range Rand
+    assert!(st.fault().is_none());
+}
+
+#[test]
+fn simultaneous_wins_are_a_draw_not_two_winners() {
+    use omnia_dsl::{Cond, PlayerResult, TerminalRule};
+    let mut def = load_def("gambit");
+    def.terminal = vec![TerminalRule { cond: Cond::True, result: PlayerResult::Win }];
+    let g = Game::new(def).unwrap();
+    let st = State::new(&g, 1);
+    let pay = st.payoffs().expect("game ends immediately");
+    assert_eq!(&pay[..2], &[0.0, 0.0], "both players won at once");
+    assert_eq!(pay[0] + pay[1], 0.0, "two-player payoffs must be zero-sum");
+}
+
+#[test]
+fn transform_spends_steps_so_it_cannot_dodge_the_budget() {
+    use omnia_dsl::{Cond, Effect, SelOrder, Sel, ZRef, ZWho};
+    let mut def = load_def("gambit");
+    def.limits.max_steps = 20;
+    // the whole deck (23 cards) is transformed in one effect
+    def.actions[2].effect = Effect::Transform(Sel::Zones { zones: vec![ZRef { who: ZWho::Me, zone: 0 }], filter: Cond::True, order: SelOrder::All }, 0);
+    let g = Game::new(def).unwrap();
+    let mut st = State::new(&g, 1);
+    let end = st.legal_actions().iter().position(|a| a.def == 2).unwrap();
+    st.apply(end);
+    assert_eq!(st.fault(), Some(Fault::StepLimit));
+}
+
+#[test]
+fn relabel_permutes_class_labels_within_the_documented_range() {
+    use omnia_dsl::{relabel::CLASS_LABELS, Relabel};
+    let def = load_def("skirmish");
+    for seed in 0..8u64 {
+        let mut rr = Rng::new(seed);
+        let rl = Relabel::random(&def, |n| rr.below(n));
+        let mut head: Vec<u8> = rl.class[..CLASS_LABELS].to_vec();
+        head.sort();
+        assert_eq!(head, (0..CLASS_LABELS as u8).collect::<Vec<_>>(), "labels below {CLASS_LABELS} must be a permutation");
+        assert!(rl.class[CLASS_LABELS..].iter().enumerate().all(|(i, c)| *c as usize == CLASS_LABELS + i), "labels above stay in place");
+    }
+}
+
+#[test]
+fn replay_rejects_out_of_range_actions() {
+    let g = load("skirmish");
+    let (mut rep, _) = playout(&g, 3);
+    assert!(rep.replay(&g).is_ok());
+    rep.actions[2] = 10_000; // far beyond any legal-action list
+    let err = rep.replay(&g).err().expect("must be rejected");
+    assert!(err.contains("invalid action"), "{err}");
+    // extra actions after the game is over are rejected too
+    let (mut rep, _) = playout(&g, 3);
+    rep.actions.push(0);
+    assert!(rep.replay(&g).is_err());
 }

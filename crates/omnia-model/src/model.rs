@@ -204,10 +204,14 @@ impl<B: Backend> OmniAstra<B> {
         Losses { total, policy, value }
     }
 
-    /// Freeze the shared backbone (registers, relational blocks, decoder);
+    /// Freeze the shared backbone (registers, attention-bias tables, relational
+    /// blocks, decoder);
     /// the input adapter and output heads stay trainable.
     pub fn freeze_backbone(mut self) -> Self {
         self.reg = self.reg.set_require_grad(false);
+        self.rel_tab = self.rel_tab.map(|t| t.no_grad());
+        self.tb_tab = self.tb_tab.map(|t| t.no_grad());
+        self.rel_as_tab = self.rel_as_tab.map(|t| t.no_grad());
         self.blocks = self.blocks.no_grad();
         self.final_norm = self.final_norm.no_grad();
         self.link_proj = self.link_proj.no_grad();
