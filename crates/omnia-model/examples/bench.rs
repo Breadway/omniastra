@@ -48,7 +48,7 @@ fn main() {
         st.apply(rng.below(n as u64) as usize);
     }
     let refs: Vec<&Sample> = samples.iter().collect();
-    let h = HostBatch::build(&refs, BatchOpts { n_reg: cfg.n_reg, mask_ids: false });
+    let h = HostBatch::build(&refs, BatchOpts { n_reg: cfg.n_reg, mask_ids: !cfg.use_ids });
     println!("{size} bs={bs} tokens/sample ~{} state, {} actions; backend={}", h.ns, h.na, std::any::type_name::<Inner>());
     let mut m = OmniAstra::<AB>::new(&cfg, &dev);
     println!("params: {}", m.num_params());
@@ -79,7 +79,8 @@ fn main() {
         {
             use burn::nn::{EmbeddingConfig};
             use burn::tensor::Int;
-            let emb = EmbeddingConfig::new(40, 4).init::<AB>(&dev);
+            let rel_vocab = omnia_observation::rel::VOCAB;
+            let emb = EmbeddingConfig::new(rel_vocab, 4).init::<AB>(&dev);
             let ids: Tensor<AB, 3, Int> = bt.rel_ss.clone();
             let t = Instant::now();
             for _ in 0..10 {
@@ -88,7 +89,7 @@ fn main() {
                 let _ = y.sum().into_scalar();
             }
             println!("10x rel embed lookup {:?}: {:?}", ids.dims(), t.elapsed());
-            let emb24 = EmbeddingConfig::new(40, 24).init::<AB>(&dev);
+            let emb24 = EmbeddingConfig::new(rel_vocab, 24).init::<AB>(&dev);
             let t = Instant::now();
             for _ in 0..10 {
                 let [b, n, k] = ids.dims();
@@ -109,7 +110,7 @@ fn main() {
             for _ in 0..10 {
                 let [b, n, k] = ids.dims();
                 let flat = ids.clone().reshape([b * n * k]);
-                let oh = flat.one_hot::<2>(40).float();
+                let oh = flat.one_hot::<2>(rel_vocab).float();
                 let w = emb24.weight.val();
                 let y = oh.matmul(w);
                 let _ = y.sum().into_scalar();
