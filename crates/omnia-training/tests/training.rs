@@ -99,6 +99,7 @@ fn training_reduces_loss_and_is_seeded_deterministic() {
 
 #[test]
 fn checkpoint_round_trip_and_resume_vs_weights_only() {
+    let _g = RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let g = game(Family::Stack, 4);
     let samples = data(&g, 0, 3);
     let refs: Vec<&Sample> = samples.iter().take(16).collect();
@@ -159,6 +160,7 @@ fn data_parallel_gradients_match_single_device() {
 
 #[test]
 fn frozen_backbone_does_not_change_but_adapter_does() {
+    let _g = RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let g = game(Family::Engine, 3);
     let samples = data(&g, 0, 3);
     let refs: Vec<&Sample> = samples.iter().take(16).collect();
@@ -218,6 +220,7 @@ impl<B: Backend> Debug1 for omnia_model::layers::Block<B> {
 fn model_moved_from_inference_to_autodiff_trains_after_enable_grad() {
     // Regression: `valid().train()` silently drops gradient tracking; the transfer
     // runner relies on `enable_grad` to fine-tune pretrained models.
+    let _g = RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let g = game(Family::Engine, 5);
     let samples = data(&g, 0, 3);
     let refs: Vec<&Sample> = samples.iter().take(16).collect();
@@ -261,6 +264,7 @@ fn run_log_surfaces_open_failures_and_writes_lines() {
 
 #[test]
 fn empty_batch_is_a_no_op_not_a_panic() {
+    let _g = RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dev: <AB as burn::tensor::backend::BackendTypes>::Device = Default::default();
     let m = OmniAstra::<AB>::new(&nano(), &dev);
     let mut t = Trainer::<AB>::new(m, nano(), TrainCfg::default(), vec![dev]);
